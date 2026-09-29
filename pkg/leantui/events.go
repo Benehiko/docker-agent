@@ -6,10 +6,12 @@ import (
 
 	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
+	"github.com/docker/docker-agent/pkg/sound"
 	"github.com/docker/docker-agent/pkg/tools"
 	builtinshell "github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	msgtypes "github.com/docker/docker-agent/pkg/tui/messages"
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 // handleEvent applies a single runtime event emitted by the App to the model,
@@ -26,12 +28,21 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			m.submitFollowUp(ctx, e.Content)
 		}
 	case *runtime.StreamStartedEvent:
+		if m.streamDepth == 0 {
+			m.streamStartTime = time.Now()
+		}
+		m.streamDepth++
 		m.busy = true
 		m.trackStreamStarted(e.SessionID)
 	case *runtime.UserMessageEvent:
 		m.handleUserMessageEvent(e)
 	case *runtime.StreamStoppedEvent:
 		m.trackStreamStopped()
+		m.streamDepth = max(0, m.streamDepth-1)
+		if m.streamDepth > 0 {
+			return
+		}
+		m.notifyStreamStopped(ctx, e.Reason)
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
 		m.screen.Transcript.AppendReasoning(e.Content)
@@ -89,6 +100,9 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 	case *runtime.SessionCompactionEvent:
 		m.handleSessionCompaction(ctx, e)
 	case *runtime.ErrorEvent:
+		if m.playSound != nil && userconfig.Get().GetSound() {
+			m.playSound(ctx, sound.Failure)
+		}
 		m.screen.Transcript.FlushPending()
 		m.addNotice("✗ ", e.Error, ui.StError())
 	case *runtime.WarningEvent:
@@ -216,4 +230,18 @@ func (m *model) applyTeamInfo(ctx context.Context, e *runtime.TeamInfoEvent) {
 		m.status.Thinking = a.Thinking
 	}
 	m.refreshCommands(ctx)
+}
+
+func (m *model) notifyStreamStopped(ctx context.Context, reason string) {
+	if m.playSound == nil || m.streamStartTime.IsZero() {
+		return
+	}
+	defer func() { m.streamStartTime = time.Time{} }()
+	switch reason {
+	case "", "normal", "continue", "steered":
+		settings := userconfig.Get()
+		if settings.GetSound() && time.Since(m.streamStartTime) >= time.Duration(settings.GetSoundThreshold())*time.Second {
+			m.playSound(ctx, sound.Success)
+		}
+	}
 }

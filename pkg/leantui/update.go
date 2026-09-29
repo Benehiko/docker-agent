@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 	"uuid"
 
 	"charm.land/lipgloss/v2"
@@ -33,6 +34,11 @@ func (m *model) handleKey(ctx context.Context, k ui.Key) {
 		} else {
 			m.handleConfirmKey(k)
 		}
+		return
+	}
+
+	if m.screen.Settings != nil {
+		m.handleSettingsKey(k)
 		return
 	}
 
@@ -262,7 +268,11 @@ type submitOptions struct {
 }
 
 func (m *model) submitEditor(ctx context.Context, text string) {
-	m.submitEditorMode(ctx, text, busySubmitSteer)
+	mode := busySubmitSteer
+	if m.sendMode == messages.SendModeQueue {
+		mode = busySubmitQueue
+	}
+	m.submitEditorMode(ctx, text, mode)
 }
 
 func (m *model) submitEditorMode(ctx context.Context, text string, mode busySubmitMode) {
@@ -337,6 +347,9 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 		return true
 	case "copy":
 		m.copyLastResponse()
+		return true
+	case "settings":
+		m.openSettings()
 		return true
 	case "help":
 		m.commitHelp()
@@ -758,6 +771,8 @@ func (m *model) resetConversation() {
 	m.pendingUsers = nil
 	m.ignoredUsers = nil
 	m.busy = false
+	m.streamDepth = 0
+	m.streamStartTime = time.Time{}
 	m.cancelMarkerPending = false
 	m.screen.Confirm = nil
 	m.usage.Reset()
@@ -834,6 +849,7 @@ func (m *model) commitHelp() {
 			ui.StMuted().Render("  /effort    set the model's reasoning effort (e.g. /effort high)"),
 			ui.StMuted().Render("  /copy      copy the last assistant response"),
 			ui.StMuted().Render("  /clear     clear the screen"),
+			ui.StMuted().Render("  /settings  change lean TUI settings"),
 			ui.StMuted().Render("  /help      show this help"),
 			ui.StMuted().Render("  /exit      quit"),
 			"",

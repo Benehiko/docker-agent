@@ -14,9 +14,12 @@ import (
 	"github.com/docker/docker-agent/pkg/gitbranch"
 	"github.com/docker/docker-agent/pkg/history"
 	"github.com/docker/docker-agent/pkg/leantui/ui"
+	"github.com/docker/docker-agent/pkg/sound"
 	"github.com/docker/docker-agent/pkg/tui/components/completion"
 	"github.com/docker/docker-agent/pkg/tui/components/editor/completions"
+	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 // Config wires the lean TUI to a prepared App and the initial run parameters.
@@ -202,6 +205,9 @@ type model struct {
 	sessionState *service.SessionState
 	usage        *ui.UsageTracker
 
+	streamDepth         int
+	streamStartTime     time.Time
+	playSound           func(context.Context, sound.Event)
 	busy                bool
 	spinnerFrame        int
 	runCancel           context.CancelFunc
@@ -215,6 +221,8 @@ type model struct {
 	banner           []string
 	disabledCommands map[string]bool
 	renderImages     bool
+	sendMode         messages.SendMode
+	settings         *leanSettings
 	// hideBanner drops the ASCII-art welcome banner; the zero value keeps it.
 	hideBanner bool
 }
@@ -241,6 +249,7 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 
 	return &model{
 		app:              cfg.App,
+		playSound:        sound.Play,
 		term:             term,
 		r:                ui.NewRenderer(term.Writer(), w, h),
 		width:            w,
@@ -253,6 +262,7 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		banner:           cfg.Banner,
 		disabledCommands: disabled,
 		renderImages:     renderImages,
+		sendMode:         messages.ParseSendMode(userconfig.Get().GetBusySendMode()),
 		hideBanner:       cfg.ShowBanner != nil && !*cfg.ShowBanner,
 	}
 }

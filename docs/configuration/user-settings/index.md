@@ -27,7 +27,7 @@ settings:
   sound: true
 ```
 
-You rarely need to hand-edit this file. Most fields are managed from the TUI's `/settings` dialog (**Appearance**, **Behavior**, **Notifications** tabs) — press <kbd>Enter</kbd> there to apply and persist a change. A few fields (`permissions`, `hooks`, `keybindings`) have no dialog UI and are only set by editing the file directly.
+You rarely need to hand-edit this file. Most fields are managed from the TUI's `/settings` dialog (**Appearance**, **Behavior**, **Notifications** tabs) — press <kbd>Enter</kbd> there to apply and persist a change. The lean TUI has a smaller inline `/settings` panel with only relevant behavior settings: steering or queueing messages, default tool auto-approval, automatic snapshots, cache-stable prompts, cache-miss warnings, lean UI by default, completion sounds and their duration threshold, image rendering, the startup banner, and split diffs. It has no theme, sidebar, or tab settings. Use the arrow keys or <kbd>Space</kbd> to change a value, <kbd>Enter</kbd> to save, or <kbd>Esc</kbd> to cancel. Settings marked **next launch** do not change the current session. A few fields (`permissions`, `hooks`, `keybindings`) have no dialog UI and are only set by editing the file directly.
 
 > [!NOTE]
 > This page documents `settings:`. The user config file also has top-level sections outside `settings:` — `aliases:`, `providers:`, `board:`, `credential_helper:`, `sandbox_allowlist:` — which are not covered here.

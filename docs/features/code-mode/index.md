@@ -12,7 +12,7 @@ _Let an agent write JavaScript that orchestrates several tool calls in one turn 
 
 By default, a model calls one tool at a time: it emits a tool call, waits for the result, then decides what to call next. For a task that chains many tool calls together — "list every open issue, then for each one fetch its comments, then summarize" — that means one model round-trip per step.
 
-**Code Mode** replaces the agent's individual tools with a single tool, `run_tools_with_javascript`, that runs a JavaScript script. Every tool the agent would otherwise call directly is exposed to that script as a plain JavaScript function (synchronous — no `await`/`async` needed). The model writes a script that calls as many of them as it needs, combines and filters the results, and returns a single string — all in one tool call.
+**Code Mode** replaces the agent's individual tools with a single tool, `run_tools_with_javascript`, that runs a JavaScript script. Every tool the agent would otherwise call directly is exposed to that script as a JavaScript function returning a Promise. Scripts support top-level `await`; use `await` for dependent calls and `Promise.all` to run independent calls in parallel. The model writes a script that calls as many of them as it needs, combines and filters the results, and returns a single string — all in one tool call.
 
 ## Enabling Code Mode
 
@@ -40,6 +40,20 @@ To force Code Mode for every agent in a run regardless of their individual confi
 ```bash
 $ docker agent run agent.yaml --code-mode-tools
 ```
+
+## Parallel Tool Calls
+
+Each tool call starts immediately and returns a Promise. Await a call before using its result, or group independent calls with `Promise.all`:
+
+```javascript
+const results = await Promise.all([
+  SearchIssues({query: "repo:docker/docker-agent is:open is:issue"}),
+  SearchIssues({query: "repo:docker/docker-agent is:open is:pr"}),
+]);
+return results.join("\n");
+```
+
+Use the function names and arguments listed in the tool description. Tool failures reject their Promises and can be handled with `try`/`catch` or `Promise.allSettled`. Unhandled rejections include tool-call history in the response. All started tool calls finish before the script response is returned, unless execution is cancelled; parallel calls are not rolled back if one fails. Existing scripts must await tool results before inspecting or combining them.
 
 ## When It Helps
 

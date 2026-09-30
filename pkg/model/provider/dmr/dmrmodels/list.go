@@ -64,6 +64,9 @@ func ListModelsWithMetadata(ctx context.Context) ([]Model, error) {
 			if IsNotInstalledError(err) {
 				return nil, ErrNotInstalled
 			}
+			if HasDockerConnection(ctx) {
+				return nil, err
+			}
 			// Otherwise the docker CLI plugin may simply be unavailable while
 			// the engine still serves DMR on a default endpoint, so fall
 			// through and let ResolveBaseURL probe the defaults.
@@ -75,6 +78,8 @@ func ListModelsWithMetadata(ctx context.Context) ([]Model, error) {
 	baseURL, httpClient := ResolveBaseURL(ctx, &latest.ModelConfig{}, endpoint)
 	if httpClient == nil {
 		httpClient = &http.Client{} //rubocop:disable Lint/HTTPClientTransport // DMR local service; default transport is appropriate
+	} else {
+		defer httpClient.CloseIdleConnections()
 	}
 
 	return ListModelsWithMetadataAt(ctx, httpClient, baseURL)

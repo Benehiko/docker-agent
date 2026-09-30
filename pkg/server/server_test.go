@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -617,4 +618,27 @@ func (s mockStore) GetSessions(context.Context) ([]*session.Session, error) {
 
 func (s mockStore) GetSessionSummaries(context.Context) ([]session.Summary, error) {
 	return nil, nil
+}
+
+func TestServerPreservesServingContext(t *testing.T) {
+	t.Parallel()
+	type contextKey struct{}
+	ctx := context.WithValue(t.Context(), contextKey{}, "selected Docker connection")
+	srv := NewWithManager(nil, "")
+	srv.e.GET("/context", func(c echo.Context) error {
+		return c.String(http.StatusOK, c.Request().Context().Value(contextKey{}).(string))
+	})
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() { _ = srv.Serve(ctx, ln) }()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+"/context", http.NoBody)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "selected Docker connection", string(body))
 }

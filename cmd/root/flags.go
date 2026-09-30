@@ -115,8 +115,6 @@ func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig, loadUs
 
 	persistentPreRunE := cmd.PersistentPreRunE
 	cmd.PersistentPreRunE = func(_ *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-
 		// Run any inherited PersistentPreRunE first so directory
 		// overrides (--config-dir, --cache-dir, --data-dir) and other
 		// global setup land before we materialise the env provider —
@@ -126,6 +124,7 @@ func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig, loadUs
 		if err := runParentPreRun(cmd, persistentPreRunE, args); err != nil {
 			return err
 		}
+		ctx := cmd.Context()
 
 		userCfg, err := loadUserConfig()
 		if err != nil {

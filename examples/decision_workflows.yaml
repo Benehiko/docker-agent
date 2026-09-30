@@ -1,0 +1,70 @@
+agents:
+  root:
+    model: default
+    description: Standalone assistant for ordinary agent runs.
+    instruction: Help with the project and verify claims against evidence.
+
+models:
+  default:
+    provider: openai
+    model: gpt-5-mini
+  strong:
+    provider: openai
+    model: gpt-5
+
+evaluators:
+  task_route:
+    provider: typesafe
+    model: jev-latest
+    type: choice
+    instructions: Choose the most suitable destination for the supplied task.
+    timeout: 3s
+
+workflows:
+  assistant:
+    entry: router
+    nodes:
+      base:
+        type: agent
+        abstract: true
+        model: default
+        instruction: Help with the project. Verify claims against evidence.
+        toolsets:
+          - type: filesystem
+      quick:
+        inherits: base
+        description: Simple questions and narrowly scoped read-only work.
+      main:
+        inherits: base
+        description: General project questions requiring investigation.
+        instruction: Investigate the task and provide a supported answer.
+      specialist:
+        inherits: main
+        description: Difficult technical analysis or architectural questions.
+        model: strong
+        fallback:
+          models: [default]
+      assistant2:
+        type: workflow
+        description: Research that needs an independent review before returning.
+        workflow: research_and_review
+      router:
+        type: decision
+        evaluator: task_route
+        allowed_nodes: [quick, main, specialist, assistant2]
+        default_node: main
+        min_probability: 0.85
+  research_and_review:
+    entry: research
+    nodes:
+      research:
+        type: agent
+        model: default
+        instruction: Investigate the task and report evidence and limitations.
+        toolsets:
+          - type: filesystem
+        next: review
+      review:
+        type: agent
+        model: strong
+        instruction: Review the supplied research; return the corrected final answer.

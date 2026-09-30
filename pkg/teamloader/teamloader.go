@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -54,6 +55,9 @@ type loadOptions struct {
 	modelOpts        []options.Opt
 	strict           bool
 	features         []config.Feature
+	enableWorkflows  bool
+	prepareWorkflows bool
+	autoWorkflow     bool
 }
 
 type Opt func(*loadOptions) error
@@ -173,6 +177,34 @@ func WithDeferredTools[D DeferredToolSet](newDeferred func() D) Opt {
 	}
 }
 
+// WithWorkflows enables loading workflow nodes for local workflow execution.
+// Other frontends should reject them rather than expose internal agents.
+func WithWorkflows() Opt {
+	return func(opts *loadOptions) error {
+		opts.enableWorkflows = true
+		opts.prepareWorkflows = true
+		return nil
+	}
+}
+
+// WithAutoWorkflow prepares workflow nodes only when a single workflow is declared.
+func WithAutoWorkflow() Opt {
+	return func(opts *loadOptions) error {
+		opts.enableWorkflows = true
+		opts.autoWorkflow = true
+		return nil
+	}
+}
+
+// WithWorkflowDeclarations validates workflows without preparing internal
+// agents. Ordinary CLI agent runs use this to preserve existing agent behavior.
+func WithWorkflowDeclarations() Opt {
+	return func(opts *loadOptions) error {
+		opts.enableWorkflows = true
+		return nil
+	}
+}
+
 // WithStrict rejects configs that rely on anything the application did not
 // enable: a model provider missing from the provider registry, a toolset type
 // missing from the toolset registry, or a [config.Feature] not listed here.
@@ -193,6 +225,8 @@ func WithStrict(features ...config.Feature) Opt {
 // the team and configuration needed for runtime model switching.
 type LoadResult struct {
 	Team      *team.Team
+	Workflows map[string]latest.WorkflowConfig
+	Routers   map[string]map[string]evaluator.Evaluator
 	Models    map[string]latest.ModelConfig
 	Providers map[string]latest.ProviderConfig
 	// ProviderRegistry is the registry used to instantiate model providers for this load.
@@ -215,6 +249,11 @@ type LoadResult struct {
 	// from the X-Cagent-Encrypted-Config response header when the agent YAML
 	// was fetched from a trusted Docker URL. Empty when neither applies.
 	EncryptedConfig string
+}
+
+// WorkflowAgentName names the prepared agent for a workflow node without collisions.
+func WorkflowAgentName(workflow, node string) string {
+	return fmt.Sprintf("workflow:%d:%s:%d:%s", len(workflow), workflow, len(node), node)
 }
 
 // Load loads an agent team from the given source
@@ -268,6 +307,13 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 	cfg, err := config.Load(ctx, agentSource, config.WithFlavors(runConfig.Flavors...))
 	if err != nil {
 		return nil, err
+	}
+	if len(cfg.Workflows) > 0 && !loadOpts.enableWorkflows {
+		return nil, errors.New("decision workflows require a local CLI run; use run --workflow <name> <config>")
+	}
+
+	if loadOpts.autoWorkflow && len(cfg.Workflows) == 1 {
+		loadOpts.prepareWorkflows = true
 	}
 
 	// When the agent YAML was fetched from a trusted Docker URL that returned
@@ -366,6 +412,32 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		config.ResolveModelAliases(ctx, cfg, modelsStore)
 	}
 
+	workflows, err := config.ResolveWorkflowToolsets(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if loadOpts.prepareWorkflows {
+		for _, wfName := range slices.Sorted(maps.Keys(workflows)) {
+			wf := workflows[wfName]
+			for _, nodeName := range slices.Sorted(maps.Keys(wf.Nodes)) {
+				node := wf.Nodes[nodeName]
+				if node.Type != "agent" || node.Abstract {
+					continue
+				}
+				internal := WorkflowAgentName(wfName, nodeName)
+				for _, existing := range cfg.Agents {
+					if existing.Name == internal {
+						return nil, fmt.Errorf("workflow agent name %q collides with an existing agent", internal)
+					}
+				}
+				cfg.Agents = append(cfg.Agents, node.AgentConfig(internal))
+			}
+		}
+	}
+	if len(cfg.Agents) == 0 && loadOpts.prepareWorkflows {
+		return nil, errors.New("workflow needs at least one executable agent")
+	}
+
 	if err := config.CheckRequiredEnvVars(ctx, cfg, runConfig.ModelsGateway, env); err != nil {
 		return nil, err
 	}
@@ -380,8 +452,12 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		}
 	}
 
+	// Runtime-level router templates are bound independently for each decision node.
 	evaluators := make(map[string]evaluator.Evaluator, len(cfg.Evaluators))
 	for name, def := range cfg.Evaluators {
+		if def.Type == "choice" && len(def.Choices) == 0 {
+			continue
+		}
 		resolved, err := def.Resolve(cfg.Providers)
 		if err != nil {
 			return nil, fmt.Errorf("evaluator %q: %w", name, err)
@@ -393,6 +469,28 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		evaluators[name] = client
 	}
 
+	bindings := make(map[string]map[string]evaluator.Evaluator, len(workflows))
+	if !loadOpts.prepareWorkflows {
+		workflows = cfg.Workflows
+	} else {
+		for wfName, wf := range workflows {
+			bindings[wfName] = make(map[string]evaluator.Evaluator)
+			for nodeName, node := range wf.Nodes {
+				if node.Type != "decision" {
+					continue
+				}
+				def, err := cfg.RouterEvaluator(wf, node).Resolve(cfg.Providers)
+				if err != nil {
+					return nil, fmt.Errorf("workflows.%s.nodes.%s: %w", wfName, nodeName, err)
+				}
+				client, err := evaluatorprovider.New(ctx, def, env)
+				if err != nil {
+					return nil, fmt.Errorf("workflows.%s.nodes.%s: %w", wfName, nodeName, err)
+				}
+				bindings[wfName][nodeName] = client
+			}
+		}
+	}
 	// Make model definitions available to toolset creators (e.g., RAG reranking)
 	runConfig.Models = cfg.Models
 	runConfig.Providers = cfg.Providers
@@ -649,6 +747,8 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			team.WithAgentConfigs(agentConfigs),
 			team.WithRuntimeSafety(runtimeSafety),
 		),
+		Workflows:          workflows,
+		Routers:            bindings,
 		Models:             cfg.Models,
 		Providers:          cfg.Providers,
 		ProviderRegistry:   loadOpts.providerRegistry,
@@ -1325,6 +1425,8 @@ func inheritOptions(parent *loadOptions) Opt {
 		opts.modelOpts = parent.modelOpts
 		opts.strict = parent.strict
 		opts.features = parent.features
+		opts.enableWorkflows = parent.enableWorkflows
+		opts.prepareWorkflows = parent.prepareWorkflows
 		return nil
 	}
 }

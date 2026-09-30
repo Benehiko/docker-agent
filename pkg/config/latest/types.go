@@ -28,6 +28,7 @@ type Config struct {
 	Providers  map[string]ProviderConfig  `json:"providers,omitempty"`
 	Models     map[string]ModelConfig     `json:"models,omitempty"`
 	Evaluators map[string]EvaluatorConfig `json:"evaluators,omitempty"`
+	Workflows  map[string]WorkflowConfig  `json:"workflows,omitempty"`
 	MCPs       map[string]MCPToolset      `json:"mcps,omitempty"`
 	RAG        map[string]RAGToolset      `json:"rag,omitempty"`
 	// Commands and Skills are reusable, named groups shared across agents.

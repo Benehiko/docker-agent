@@ -143,7 +143,7 @@ func TestLoadExamples(t *testing.T) {
 			runConfig := &config.RuntimeConfig{}
 			runConfig.WorkingDir = t.TempDir()
 
-			teams, err := Load(catalogContext(t), agentSource, runConfig, withTestProviderRegistry()...)
+			teams, err := Load(catalogContext(t), agentSource, runConfig, withTestProviderRegistry(WithWorkflows())...)
 			require.NoError(t, err)
 			assert.NotEmpty(t, teams)
 		})

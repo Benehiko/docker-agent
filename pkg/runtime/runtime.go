@@ -239,6 +239,7 @@ type ModelStore interface {
 
 // LocalRuntime manages the execution of agents
 type LocalRuntime struct {
+	workflowRunner   WorkflowRunner
 	harnessFactory   *harness.Factory
 	commandEvaluator *CommandEvaluatorFactory
 
@@ -1798,6 +1799,11 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 		}
 
 		send(NewTokenUsageEvent(sess.ID, r.currentAgentName(), usage))
+	}
+
+	if r.workflowRunner != nil {
+		send(ToolsetInfo(0, false, a.Name()))
+		return
 	}
 
 	// Tool loading can be slow (MCP servers need to start). Mark the

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,6 +24,7 @@ import (
 	"github.com/docker/docker-agent/pkg/cli"
 	"github.com/docker/docker-agent/pkg/config"
 	latestcfg "github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/evaluator"
 	"github.com/docker/docker-agent/pkg/hooks"
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/input"
@@ -43,6 +45,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/recorder"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 	"github.com/docker/docker-agent/pkg/userconfig"
+	"github.com/docker/docker-agent/pkg/workflow"
 	"github.com/docker/docker-agent/pkg/worktree"
 )
 
@@ -55,9 +58,10 @@ const worktreeAutoName = "auto"
 var projectDefaultAgentFiles = []string{"docker-agent.yaml", "docker-agent.yml", "docker-agent.hcl"}
 
 type runExecFlags struct {
-	agentName   string
-	autoApprove bool
-	safety      string
+	agentName    string
+	workflowName string
+	autoApprove  bool
+	safety       string
 	// safetyChanged / yoloChanged record whether --safety / --yolo were
 	// explicitly passed on the command line. Explicit flags are the only
 	// safety sources allowed to override a resumed session's stored mode;
@@ -175,6 +179,7 @@ func newRunCmd() *cobra.Command {
 
 func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringVarP(&flags.agentName, "agent", "a", "", "Name of the agent to run (defaults to the team's first agent)")
+	cmd.PersistentFlags().StringVar(&flags.workflowName, "workflow", "", "Run a named decision workflow")
 	cmd.PersistentFlags().BoolVar(&flags.autoApprove, "yolo", false, "Automatically approve all tool calls without prompting (same as --safety autonomous)")
 	cmd.PersistentFlags().StringVar(&flags.safety, "safety", "", "Safety mode for tool approval: strict (ask for everything), balanced (auto-approve safe calls), restricted (auto-approve safe calls, deny the rest — for unattended runs), or autonomous (approve everything)")
 	cmd.PersistentFlags().BoolVar(&flags.hideToolResults, "hide-tool-results", false, "Hide tool call results")
@@ -272,6 +277,11 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		}()
 	}
 
+	if f.workflowName != "" {
+		if f.agentName != "" || cmd.Flags().Changed("agent") || cmd.Flags().Changed("agent-picker") || f.sessionID != "" || f.sessionReadOnly || f.remoteAddress != "" || f.listenAddr != "" || f.attachmentPath != "" || f.outputJSON {
+			return errors.New("--workflow cannot be combined with --agent, --agent-picker, --session, --session-read-only, --remote, --listen, --attach, or --json")
+		}
+	}
 	// Validate an explicit --theme value early so a typo fails fast with a
 	// helpful message instead of silently falling back to the default theme
 	// once the TUI starts.
@@ -481,7 +491,11 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 			return err
 		}
 		if loadResult != nil {
+			err := f.selectWorkflow(loadResult)
 			stopToolSets(ctx, loadResult.Team)
+			if err != nil {
+				return err
+			}
 		}
 		out.Println("Dry run mode enabled. Agent initialized but will not execute.")
 		return nil
@@ -514,6 +528,12 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	if err != nil {
 		return err
 	}
+	if err := f.selectWorkflow(loadResult); err != nil {
+		if loadResult != nil {
+			stopToolSets(ctx, loadResult.Team)
+		}
+		return err
+	}
 	if createdWorktree != nil {
 		out.Println("Using git worktree: " + createdWorktree.Dir + " (branch " + createdWorktree.Branch + ")")
 		// loadResult is nil for the remote backend; worktrees are mutually
@@ -533,6 +553,13 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	defer cleanup()
 
 	if !useTUI {
+		if f.workflowName != "" {
+			local, ok := rt.(*runtime.LocalRuntime)
+			if !ok {
+				return errors.New("--workflow is only supported by the local runtime")
+			}
+			return f.handleWorkflow(ctx, out, local, sess, loadResult, args)
+		}
 		// Non-interactive (--exec) runs never clean up the worktree: there
 		// is no safe moment to prompt, and silently discarding work would
 		// be surprising. The worktree is left in place for later inspection.
@@ -894,6 +921,14 @@ func (f *runExecFlags) dispatchWorktreeCreate(ctx context.Context, out *cli.Prin
 
 func (f *runExecFlags) loadAgentFrom(ctx context.Context, req runtime.LoadTeamRequest) (*teamloader.LoadResult, error) {
 	opts := append(loaderdefaults.Opts(), teamloader.WithModelOverrides(req.ModelOverrides))
+	switch {
+	case f.workflowName != "":
+		opts = append(opts, teamloader.WithWorkflows())
+	case f.agentName == "" && f.agentPickerSpec == "":
+		opts = append(opts, teamloader.WithAutoWorkflow())
+	default:
+		opts = append(opts, teamloader.WithWorkflowDeclarations())
+	}
 	if len(req.PromptFiles) > 0 {
 		opts = append(opts, teamloader.WithPromptFiles(req.PromptFiles))
 	}
@@ -931,6 +966,9 @@ func (f *runExecFlags) runtimeOpts(loadResult *teamloader.LoadResult, runConfig 
 		runtime.WithModelSwitcherConfig(modelSwitcherCfg),
 		runtime.WithBudget(loadResult.Budget),
 		runtime.WithNamedBudgets(loadResult.Budgets, loadResult.AgentBudgets),
+	}
+	if f.workflowName != "" {
+		opts = append(opts, runtime.WithWorkflowRunner(workflow.Runner(f.workflowName, loadResult.Workflows, loadResult.Routers)))
 	}
 	return opts
 }
@@ -1044,6 +1082,102 @@ func (f *runExecFlags) createLocalRuntimeAndSession(ctx context.Context, loadRes
 	}
 
 	return localRt, sess, nil
+}
+
+func (f *runExecFlags) selectWorkflow(loaded *teamloader.LoadResult) error {
+	if loaded == nil {
+		if f.workflowName != "" {
+			return errors.New("--workflow needs a local configuration")
+		}
+		return nil
+	}
+	if f.workflowName == "" && f.agentName == "" && f.agentPickerSpec == "" && len(loaded.Workflows) == 1 {
+		for name := range loaded.Workflows {
+			f.workflowName = name
+		}
+	}
+	if f.workflowName == "" {
+		if len(loaded.Workflows) > 0 && loaded.Team.Size() == 0 {
+			return errors.New("this configuration defines multiple workflows; select one with --workflow <name>")
+		}
+		return nil
+	}
+	if _, ok := loaded.Workflows[f.workflowName]; !ok {
+		return fmt.Errorf("workflow %q not found in config", f.workflowName)
+	}
+	if f.agentName != "" || f.agentPickerSpec != "" || f.sessionID != "" || f.sessionReadOnly || f.remoteAddress != "" || f.listenAddr != "" || f.attachmentPath != "" || f.outputJSON {
+		return errors.New("--workflow cannot be combined with --agent, --agent-picker, --session, --session-read-only, --remote, --listen, --attach, or --json")
+	}
+	return nil
+}
+
+func (f *runExecFlags) handleWorkflow(ctx context.Context, out *cli.Printer, rt *runtime.LocalRuntime, sess *session.Session, loaded *teamloader.LoadResult, args []string) error {
+	if len(args) != 2 {
+		return errors.New("--workflow expects one prompt after the config path (or '-' to read stdin)")
+	}
+	prompt := args[1]
+	if prompt == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		prompt = string(data)
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return errors.New("workflow input must not be empty")
+	}
+	sess.NonInteractive = true
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	events := make(chan runtime.Event, 128)
+	var printMu sync.Mutex
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for event := range events {
+			printMu.Lock()
+			switch e := event.(type) {
+			case *runtime.WarningEvent:
+				out.PrintWarning(e.Message)
+			case *runtime.ToolCallEvent:
+				if !f.hideToolCalls {
+					out.PrintToolCall(e.ToolCall)
+				}
+			case *runtime.ToolCallResponseEvent:
+				if !f.hideToolCalls {
+					out.PrintToolCallResponse(e.ToolDefinition.Name, e.Response)
+				}
+			}
+			printMu.Unlock()
+		}
+	}()
+	sink := runtime.NewChannelSink(events)
+	executor := workflow.Executor{Workflows: loaded.Workflows, Routers: make(map[string]map[string]evaluator.Evaluator), Agents: workflow.RuntimeAgentRunner{Runtime: rt, Session: sess, Events: sink}, Check: func(context.Context) error { return rt.WorkflowBudget(rt.CurrentAgentName(ctx)) }, OnRoute: func(route workflow.Route) {
+		printMu.Lock()
+		defer printMu.Unlock()
+		out.Printf("Workflow %s/%s [%s, model %s]: %s -> %s", route.Workflow, route.Node, route.Evaluator, route.Model, route.Selected, route.Destination)
+		if route.Probability != nil {
+			out.Printf(" (p=%.3f)", *route.Probability)
+		}
+		out.Println("")
+		if route.FallbackReason != "" {
+			out.PrintWarning(fmt.Sprintf("workflow %s/%s routed to %s: %s", route.Workflow, route.Node, route.Destination, route.FallbackReason))
+		}
+	}}
+	for name, nodes := range loaded.Routers {
+		executor.Routers[name] = make(map[string]evaluator.Evaluator)
+		for id, client := range nodes {
+			executor.Routers[name][id] = workflow.RuntimeEvaluator{Runtime: rt, Session: sess, AgentName: rt.CurrentAgentName(ctx), Name: name + "/" + id, Client: client, Events: sink}
+		}
+	}
+	answer, err := executor.Run(ctx, f.workflowName, prompt)
+	close(events)
+	<-done
+	if err != nil {
+		return err
+	}
+	out.Println(answer)
+	return nil
 }
 
 func (f *runExecFlags) handleExecMode(ctx context.Context, out *cli.Printer, rt runtime.Runtime, sess *session.Session, args []string) error {

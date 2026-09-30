@@ -34,7 +34,7 @@ evaluators:
 | `model` | Required provider model ID, such as `jev-latest`. Pin a versioned ID for reproducible evaluations. |
 | `type` | Required: `boolean`, `choice`, or `score`. |
 | `instructions` | Required assessment question or rubric instructions. |
-| `choices` | For `choice`: map of 2–255 outcome keys to descriptions. |
+| `choices` | For `choice`: map of 2–255 outcome keys to descriptions. May be omitted only on templates used by [decision workflows](../decision-workflows/); each router derives its own choices from its destination descriptions. Tool guards always require concrete choices. |
 | `levels` | For `score`: 2–10 descriptions ordered from lowest to highest. |
 | `base_url` | Optional API base URL. TypeSafe defaults to `https://api.typesafe.ai`; `/v1/systemone` is appended. |
 | `endpoint` | Optional exact HTTP(S) request URL. Overrides `base_url`, including a named provider's default; no path is appended. Credentials, query strings, and fragments are not allowed. |
@@ -68,6 +68,7 @@ providers. Credentials come from the normal environment provider, including
 configured secret sources. The models gateway does not supply evaluator credentials.
 
 In HCL, use `evaluator "name" { ... }` for a top-level named evaluator.
+Decision workflow definitions themselves require YAML or JSON, not HCL.
 
 ## Compatible endpoints: Laya on Baseten
 

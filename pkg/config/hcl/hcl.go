@@ -24,6 +24,7 @@
 package hcl
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"path/filepath"
@@ -68,7 +69,7 @@ func LooksLikeHCL(data []byte) bool {
 // topLevelHCLKeywords lists the block names that may legitimately appear at
 // the top level of a docker-agent HCL document.
 var topLevelHCLKeywords = []string{
-	"agent", "model", "evaluator", "provider", "mcp", "rag", "metadata", "permissions", "toolsets", "flavors",
+	"agent", "model", "evaluator", "provider", "mcp", "rag", "metadata", "permissions", "toolsets", "flavors", "workflow", "workflows",
 }
 
 // ToYAML parses an HCL document and returns an equivalent YAML document
@@ -100,6 +101,9 @@ func ToMap(data []byte, filename string) (map[string]any, error) {
 	out, diags := convertBody(body, newEvalContext(baseDir(filename)))
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("converting HCL %s: %s", filename, diags.Error())
+	}
+	if _, ok := out["workflows"]; ok {
+		return nil, errors.New("workflows are not supported in HCL; use YAML or JSON for decision workflows")
 	}
 	return out, nil
 }
@@ -138,6 +142,7 @@ func (r blockRule) expectedLabels() int {
 var blockRules = map[string]blockRule{
 	// Top-level keyed maps (and equivalents inside agents).
 	"agent":     {mode: modeMapByLabel, outKey: "agents"},
+	"workflow":  {mode: modeMapByLabel, outKey: "workflows"},
 	"model":     {mode: modeMapByLabel, outKey: "models"},
 	"evaluator": {mode: modeMapByLabel, outKey: "evaluators"},
 	"provider":  {mode: modeMapByLabel, outKey: "providers"},

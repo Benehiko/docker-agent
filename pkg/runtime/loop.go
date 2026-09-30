@@ -86,6 +86,9 @@ func (r *LocalRuntime) appendSteerAndEmit(sess *session.Session, sm QueuedMessag
 // Returns drained=true with messageCountBefore set when any messages
 // were drained and emitted; otherwise drained=false.
 func (r *LocalRuntime) drainAndEmitSteered(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) steerResult {
+	if r.workflowRunner != nil && sess.IsSubSession() {
+		return steerResult{}
+	}
 	steered := r.steerQueue.Drain(ctx)
 	if len(steered) == 0 {
 		return steerResult{}
@@ -382,6 +385,10 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		sessionStartSources:    sessionStart.sources,
 	}
 
+	if messages, ok := ctx.Value(workflowContextKey{}).([]chat.Message); ok {
+		ls.userPromptMsgs = messages
+	}
+
 	// Emit team information
 	sink.Emit(TeamInfo(r.agentDetailsFromTeam(ctx), a.Name()))
 
@@ -409,7 +416,11 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		}
 	}
 
-	agentTools, err := r.getTools(ctx, sess, a, sessionSpan, sink, true)
+	var agentTools []tools.Tool
+	var err error
+	if r.workflowRunner == nil || sess.IsSubSession() {
+		agentTools, err = r.getTools(ctx, sess, a, sessionSpan, sink, true)
+	}
 	if err != nil {
 		sink.Emit(ErrorWithCodeForSession(sess.ID, ErrorCodeToolFailed, fmt.Sprintf("failed to get tools: %v", err)))
 		return
@@ -449,6 +460,11 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	}
 
 	sink.Emit(StreamStarted(sess.ID, a.Name()))
+
+	if r.workflowRunner != nil && !sess.IsSubSession() {
+		streamReason = r.runWorkflowConversation(ctx, sess, ls, sink)
+		return
+	}
 
 	if a.HasHarness() {
 		streamReason = r.runHarnessAgent(ctx, sess, a, sink)
@@ -1135,7 +1151,7 @@ func (r *LocalRuntime) runTurn(
 		// a new turn — the model sees them as fresh input, not a
 		// mid-stream interruption. Each follow-up gets a full
 		// undivided agent turn.
-		if followUp, ok := r.followUpQueue.Dequeue(ctx); ok {
+		if followUp, ok := r.dequeueWorkflowFollowUp(ctx, sess); ok {
 			userMsg := session.UserMessage(followUp.Content, followUp.MultiContent...)
 			userMsg.Message.MessageID = uuid.NewV4().String()
 			pos := sess.AddMessage(userMsg)

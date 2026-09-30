@@ -137,6 +137,12 @@
         ]
       }
     },
+    "workflows": {
+      "type": "object",
+      "description": "Named, acyclic decision workflows (available through run --exec --workflow).",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/WorkflowConfig" }
+    },
     "evaluators": {
       "type": "object",
       "description": "Named provider-backed assessments, independent of chat models and decision policies.",
@@ -146,10 +152,40 @@
     }
   },
   "additionalProperties": false,
-  "required": [
-    "agents"
+  "anyOf": [
+    { "required": ["agents"] },
+    { "required": ["workflows"] }
   ],
   "definitions": {
+    "WorkflowConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "nodes"],
+      "properties": {
+        "entry": { "type": "string", "minLength": 1 },
+        "nodes": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/definitions/WorkflowNode" } }
+      }
+    },
+    "WorkflowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["agent", "decision", "workflow"] },
+        "description": { "type": "string" },
+        "inherits": { "type": "string" },
+        "abstract": { "type": "boolean" },
+        "model": { "type": "string" },
+        "instruction": { "type": "string" },
+        "toolsets": { "type": "array", "items": { "$ref": "#/definitions/Toolset" } },
+        "fallback": { "$ref": "#/definitions/FallbackConfig" },
+        "next": { "type": "string" },
+        "workflow": { "type": "string" },
+        "evaluator": { "type": "string" },
+        "allowed_nodes": { "type": "array", "minItems": 2, "maxItems": 255, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "default_node": { "type": "string" },
+        "min_probability": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
     "Lifecycle": {
       "type": "object",
       "description": "Controls how the agent supervises a long-running toolset process (MCP server, remote MCP, LSP server). All fields are optional; pick a profile that matches your taste and override individual knobs as needed.",
@@ -3385,9 +3421,6 @@
             }
           },
           "then": {
-            "required": [
-              "choices"
-            ],
             "not": {
               "required": [
                 "levels"

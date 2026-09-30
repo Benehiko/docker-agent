@@ -25,7 +25,9 @@ type EvaluatorConfig struct {
 }
 
 // Validate checks an evaluator definition before provider resolution.
-func (e EvaluatorConfig) Validate() error {
+func (e EvaluatorConfig) Validate() error { return e.validate(false) }
+
+func (e EvaluatorConfig) validate(allowTemplate bool) error {
 	if strings.TrimSpace(e.Provider) == "" || strings.TrimSpace(e.Model) == "" {
 		return errors.New("provider and model are required")
 	}
@@ -63,6 +65,9 @@ func (e EvaluatorConfig) Validate() error {
 			return errors.New("boolean evaluators cannot define choices or levels")
 		}
 	case "choice":
+		if allowTemplate && len(e.Choices) == 0 && len(e.Levels) == 0 {
+			break // A workflow router supplies choices from its destination metadata.
+		}
 		if len(e.Choices) < 2 || len(e.Choices) > 255 || len(e.Levels) != 0 {
 			return errors.New("choice evaluators require 2-255 choices and no levels")
 		}
@@ -140,6 +145,9 @@ func (p *EvaluatorPolicy) validateEvaluator(e EvaluatorConfig) error {
 	if e.Type == "score" {
 		return errors.New("tool guards require a boolean or choice evaluator; score assessments are available through the Go API")
 	}
+	if e.Type == "choice" && len(e.Choices) == 0 {
+		return errors.New("tool guards require concrete evaluator choices")
+	}
 	for key := range p.Decisions {
 		if e.Type == "boolean" {
 			if key != "true" && key != "false" {
@@ -159,8 +167,21 @@ func (t *Config) ValidateEvaluators() error {
 		if strings.TrimSpace(name) == "" {
 			return errors.New("evaluator names must not be empty")
 		}
-		if err := def.Validate(); err != nil {
+		if err := def.validate(def.Type == "choice" && len(def.Choices) == 0); err != nil {
 			return fmt.Errorf("evaluators.%s: %w", name, err)
+		}
+		if def.Type == "choice" && len(def.Choices) == 0 {
+			used := false
+			for _, wf := range t.Workflows {
+				for _, n := range wf.Nodes {
+					if n.Type == "decision" && n.Evaluator == name {
+						used = true
+					}
+				}
+			}
+			if !used {
+				return fmt.Errorf("evaluators.%s: choice templates require a workflow router", name)
+			}
 		}
 	}
 	for _, a := range t.Agents {

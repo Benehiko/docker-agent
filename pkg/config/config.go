@@ -256,7 +256,7 @@ func validateConfig(cfg *latest.Config) error {
 	if err := cfg.ValidateEvaluators(); err != nil {
 		return err
 	}
-	if len(cfg.Agents) == 0 {
+	if len(cfg.Agents) == 0 && len(cfg.Workflows) == 0 {
 		return errors.New("at least one agent must be configured (add an entry under 'agents')")
 	}
 
@@ -270,6 +270,22 @@ func validateConfig(cfg *latest.Config) error {
 
 	if err := ensureModelsExist(cfg); err != nil {
 		return err
+	}
+	for workflowName, wf := range cfg.Workflows {
+		for nodeName, node := range wf.Nodes {
+			if node.Model != nil {
+				if err := ensureSingleModelExists(cfg, *node.Model, fmt.Sprintf("workflow %q node %q", workflowName, nodeName)); err != nil {
+					return err
+				}
+			}
+			if node.Fallback != nil {
+				for _, ref := range node.Fallback.Models {
+					if err := ensureSingleModelExists(cfg, ref, fmt.Sprintf("workflow %q node %q fallback", workflowName, nodeName)); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 
 	if err := resolveToolsetDefinitions(cfg); err != nil {
@@ -334,8 +350,8 @@ func validateConfig(cfg *latest.Config) error {
 	if err := validateForceHandoffs(cfg, allNames); err != nil {
 		return err
 	}
-
-	return nil
+	_, err := ResolveWorkflowToolsets(cfg)
+	return err
 }
 
 // validateForceHandoffs checks every agent's force_handoff reference:

@@ -31,6 +31,8 @@ const (
 	FeatureHooks Feature = "hooks"
 	// FeatureEvaluators permits outbound provider-backed assessments.
 	FeatureEvaluators Feature = "evaluators"
+	// FeatureWorkflows permits deterministic decision-workflow execution.
+	FeatureWorkflows Feature = "workflows"
 	// FeatureSkills covers agents loading skills from disk or inline.
 	FeatureSkills Feature = "skills"
 	// FeatureToon covers toolsets using `toon` output encoding (see
@@ -66,6 +68,31 @@ func Requires(cfg *latest.Config) Requirements {
 
 	for _, name := range slices.Sorted(maps.Keys(cfg.Evaluators)) {
 		r.feature(FeatureEvaluators, "evaluators."+name)
+	}
+	resolved, _ := ResolveWorkflowToolsets(cfg)
+	for _, name := range slices.Sorted(maps.Keys(cfg.Workflows)) {
+		wf := cfg.Workflows[name]
+		r.feature(FeatureWorkflows, "workflows."+name)
+		if resolved != nil {
+			wf = resolved[name]
+		}
+		for _, id := range slices.Sorted(maps.Keys(wf.Nodes)) {
+			n := wf.Nodes[id]
+			loc := "workflows." + name + ".nodes." + id
+			if n.Model != nil {
+				r.modelRef(cfg, *n.Model, loc+".model")
+			}
+			if n.Toolsets != nil {
+				for i, ts := range *n.Toolsets {
+					r.toolset(cfg, ts, fmt.Sprintf("%s.toolsets[%d]", loc, i))
+				}
+			}
+			if n.Fallback != nil {
+				for i, ref := range n.Fallback.Models {
+					r.modelRef(cfg, ref, fmt.Sprintf("%s.fallback.models[%d]", loc, i))
+				}
+			}
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Models)) {
 		r.model(cfg, cfg.Models[name], "models."+name)

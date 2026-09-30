@@ -327,7 +327,7 @@ agents:
       - type: echo
 `
 	echo := &echoToolSet{}
-	model := newScriptedModel("mock/root", toolTurn("run_tools_with_javascript", `{"script":"return echo({text: \"ping\"}) + \"!\""}`), textTurn("done"))
+	model := newScriptedModel("mock/root", toolTurn("run_tools_with_javascript", `{"script":"return (await echo({text: \"ping\"})) + \"!\""}`), textTurn("done"))
 	s := openTestSession(t, testHost(echo, map[string]provider.Provider{"root": model}), sessionOptions{YAML: yaml, AutoApprove: true})
 
 	var c collectingEmitter

@@ -31,7 +31,7 @@ func toolToTypeScript(tool tools.Tool) string {
 		fmt.Fprintf(&doc, "type %s = %s;\n\n", inputName, schemaType(input, input, 0))
 	}
 	fmt.Fprintf(&doc, "type %s = %s;\n\n", outputName, schemaType(output, output, 0))
-	fmt.Fprintf(&doc, "declare function %s(args: %s): %s;\n", baseName, inputName, outputName)
+	fmt.Fprintf(&doc, "declare function %s(args: %s): Promise<%s>;\n", baseName, inputName, outputName)
 
 	return doc.String()
 }

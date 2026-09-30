@@ -20,7 +20,9 @@ and manipulate the results before returning them.
 
 Instructions:
  - The script has access to all the tools as plain javascript functions.
- - "await"/"async" are never needed. All the tool calls are synchronous.
+ - Every tool call returns a Promise. Use "await" to get its result; top-level "await" is supported.
+ - Run independent tool calls in parallel with "await Promise.all([ToolA(args), ToolB(args)])".
+ - Await dependent tool calls sequentially. Tool failures reject their Promises and can be caught with try/catch.
  - The script must return a string result.
  - "console.*" functions can be used to print debug information.
  - It's often encouraged to group multiple tool calls in a single script to reduce the number of LLM interactions.

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -37,13 +38,36 @@ type toolCallTracker struct {
 	calls []ToolCallInfo
 }
 
-func (t *toolCallTracker) record(info ToolCallInfo) {
-	t.calls = append(t.calls, info)
+type toolCompletion struct {
+	index  int
+	info   ToolCallInfo
+	settle func() error
+}
+
+type toolEventLoop struct {
+	vm          *goja.Runtime
+	tracker     *toolCallTracker
+	completions chan toolCompletion
+	pending     int
 }
 
 func (c *codeModeTool) runJavascript(ctx context.Context, rt tools.Runtime, script string) (ScriptResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	vm := goja.New()
+	stopInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ctx.Err()) })
+	defer stopInterrupt()
 	tracker := &toolCallTracker{}
+	loop := &toolEventLoop{vm: vm, tracker: tracker, completions: make(chan toolCompletion)}
+	unhandled := make(map[*goja.Promise]bool)
+	vm.SetPromiseRejectionTracker(func(p *goja.Promise, operation goja.PromiseRejectionOperation) {
+		if operation == goja.PromiseRejectionReject {
+			unhandled[p] = true
+		} else {
+			delete(unhandled, p)
+		}
+	})
 
 	// Always stamp a hash + length so dashboards can correlate
 	// identical scripts ("model ran the same script 200 times this
@@ -85,7 +109,7 @@ func (c *codeModeTool) runJavascript(ctx context.Context, rt tools.Runtime, scri
 		}
 
 		for _, tool := range allTools {
-			call := callTool(ctx, rt, tool, tracker)
+			call := loop.callTool(ctx, rt, tool)
 			_ = vm.Set(tool.Name, call)
 			if name := typeName(tool.Name); name != tool.Name {
 				_ = vm.Set(name, call)
@@ -93,11 +117,40 @@ func (c *codeModeTool) runJavascript(ctx context.Context, rt tools.Runtime, scri
 		}
 	}
 
-	// Wrap the user script in an IIFE to allow top-level returns.
-	script = "(() => {\n" + script + "\n})()"
+	// Wrap the script to support top-level await and return.
+	script = "(async () => {\n" + script + "\n})()"
 
 	// Run the script.
 	v, err := vm.RunString(script)
+	if err == nil {
+		promise := v.Export().(*goja.Promise)
+		for loop.pending > 0 && err == nil {
+			select {
+			case completion := <-loop.completions:
+				loop.pending--
+				tracker.calls[completion.index] = completion.info
+				err = completion.settle()
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+		}
+		if err == nil {
+			switch promise.State() {
+			case goja.PromiseStateFulfilled:
+				v = promise.Result()
+			case goja.PromiseStateRejected:
+				err = fmt.Errorf("%s", promise.Result().String())
+			case goja.PromiseStatePending:
+				err = errors.New("script returned a Promise that cannot settle: no pending tool calls")
+			}
+		}
+		if err == nil {
+			for p := range unhandled {
+				err = fmt.Errorf("unhandled Promise rejection: %s", p.Result().String())
+				break
+			}
+		}
+	}
 	if err != nil {
 		// Script execution failed - include tool call history to help LLM understand what went wrong
 		return ScriptResult{
@@ -121,25 +174,29 @@ func (c *codeModeTool) runJavascript(ctx context.Context, rt tools.Runtime, scri
 	}, nil
 }
 
-// callTool wraps a tool as a goja-callable function. rt is forwarded to the
-// inner handler so nested tools keep their runtime capabilities (streaming
-// output, recall) when invoked from a script.
-func callTool(ctx context.Context, rt tools.Runtime, tool tools.Tool, tracker *toolCallTracker) func(args map[string]any) (string, error) {
-	return func(args map[string]any) (string, error) {
-		output, filtered, err := invokeTool(ctx, rt, tool, args)
+// Tool handlers run concurrently, but only the event loop touches the VM and tracker.
+func (l *toolEventLoop) callTool(ctx context.Context, rt tools.Runtime, tool tools.Tool) func(args map[string]any) *goja.Promise {
+	return func(args map[string]any) *goja.Promise {
+		promise, resolve, reject := l.vm.NewPromise()
+		index := len(l.tracker.calls)
+		l.tracker.calls = append(l.tracker.calls, ToolCallInfo{Name: tool.Name, Arguments: args})
+		l.pending++
 
-		info := ToolCallInfo{
-			Name:      tool.Name,
-			Arguments: filtered,
-		}
-		if err != nil {
-			info.Error = err.Error()
-		} else {
-			info.Result = output
-		}
-		tracker.record(info)
+		go func() {
+			output, filtered, err := invokeTool(ctx, rt, tool, args)
+			info := ToolCallInfo{Name: tool.Name, Arguments: filtered, Result: output}
+			settle := func() error { return resolve(output) }
+			if err != nil {
+				info.Error = err.Error()
+				settle = func() error { return reject(l.vm.NewGoError(err)) }
+			}
+			select {
+			case l.completions <- toolCompletion{index: index, info: info, settle: settle}:
+			case <-ctx.Done():
+			}
+		}()
 
-		return output, err
+		return promise
 	}
 }
 

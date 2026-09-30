@@ -115,7 +115,7 @@ func TestCodeModeTool_TypeScriptDeclarationsInDescription(t *testing.T) {
 	assert.Contains(t, allTools[0].Description, "interface FindItemInput")
 	assert.Contains(t, allTools[0].Description, "id: string;")
 	assert.Contains(t, allTools[0].Description, "type FindItemOutput = boolean;")
-	assert.Contains(t, allTools[0].Description, "declare function FindItem(args: FindItemInput): FindItemOutput;")
+	assert.Contains(t, allTools[0].Description, "declare function FindItem(args: FindItemInput): Promise<FindItemOutput>;")
 	assert.NotContains(t, allTools[0].Description, "Where Input follows the following JSON schema")
 }
 
@@ -198,7 +198,7 @@ func TestCodeModeTool_CallToolWithNonIdentifierName(t *testing.T) {
 	allTools, err := tool.Tools(t.Context())
 	require.NoError(t, err)
 	require.Len(t, allTools, 1)
-	assert.Contains(t, allTools[0].Description, "declare function HelloWorld(args: HelloWorldInput): HelloWorldOutput;")
+	assert.Contains(t, allTools[0].Description, "declare function HelloWorld(args: HelloWorldInput): Promise<HelloWorldOutput>;")
 
 	result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
 		Function: tools.FunctionCall{
@@ -860,7 +860,7 @@ func TestCodeModeTool_FailureIncludesToolCalls(t *testing.T) {
 	// Script calls tools successfully but then throws a runtime error
 	result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
 		Function: tools.FunctionCall{
-			Arguments: `{"script":"var a = first_tool(); var b = second_tool(); throw new Error('runtime error');"}`,
+			Arguments: `{"script":"var a = await first_tool(); var b = await second_tool(); throw new Error('runtime error');"}`,
 		},
 	}, tools.NopRuntime{})
 	require.NoError(t, err)
@@ -948,7 +948,7 @@ func TestCodeModeTool_FailureIncludesToolArguments(t *testing.T) {
 
 	result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
 		Function: tools.FunctionCall{
-			Arguments: `{"script":"tool_with_args({'value': 'test123'}); throw new Error('forced error');"}`,
+			Arguments: `{"script":"await tool_with_args({'value': 'test123'}); throw new Error('forced error');"}`,
 		},
 	}, tools.NopRuntime{})
 	require.NoError(t, err)

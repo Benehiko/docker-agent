@@ -38,7 +38,7 @@ interface CreateTodoInput {
 
 type CreateTodoOutput = string;
 
-declare function CreateTodo(args: CreateTodoInput): CreateTodoOutput;
+declare function CreateTodo(args: CreateTodoInput): Promise<CreateTodoOutput>;
 `, declaration)
 }
 
@@ -62,7 +62,7 @@ type ExampleToolInput = string;
 
 type ExampleToolOutput = boolean;
 
-declare function ExampleTool(args: ExampleToolInput): ExampleToolOutput;
+declare function ExampleTool(args: ExampleToolInput): Promise<ExampleToolOutput>;
 `,
 		},
 		{
@@ -98,7 +98,7 @@ interface ExampleToolInput {
 
 type ExampleToolOutput = number[] | null;
 
-declare function ExampleTool(args: ExampleToolInput): ExampleToolOutput;
+declare function ExampleTool(args: ExampleToolInput): Promise<ExampleToolOutput>;
 `,
 		},
 		{
@@ -126,7 +126,7 @@ type ExampleToolOutput = {
   active?: boolean;
 };
 
-declare function ExampleTool(args: ExampleToolInput): ExampleToolOutput;
+declare function ExampleTool(args: ExampleToolInput): Promise<ExampleToolOutput>;
 `,
 		},
 		{
@@ -152,7 +152,7 @@ interface ExampleToolInput {
 
 type ExampleToolOutput = "ok";
 
-declare function ExampleTool(args: ExampleToolInput): ExampleToolOutput;
+declare function ExampleTool(args: ExampleToolInput): Promise<ExampleToolOutput>;
 `,
 		},
 	}
@@ -324,5 +324,5 @@ func TestToolToTypeScriptNestedAndNullableTypes(t *testing.T) {
   };
 }`)
 	assert.Contains(t, declaration, "type SearchItemsOutput = number[] | null;")
-	assert.Contains(t, declaration, "declare function SearchItems(args: SearchItemsInput): SearchItemsOutput;")
+	assert.Contains(t, declaration, "declare function SearchItems(args: SearchItemsInput): Promise<SearchItemsOutput>;")
 }

@@ -12,6 +12,7 @@ type Screen struct {
 	Autocomplete *Autocomplete
 	Status       StatusModel
 	Confirm      *ConfirmModel
+	Settings     *SettingsModel
 }
 
 func NewScreen(workingDir, branch, editorPlaceholder string, historyStore ...*history.History) *Screen {
@@ -30,14 +31,19 @@ func (s *Screen) Frame(width, _, spinnerFrame int, busy bool, sessionState servi
 	lines = append(lines, s.Autocomplete.Render(width)...)
 
 	inputStart := len(lines)
-	if s.Confirm != nil {
+	switch {
+	case s.Confirm != nil:
 		confirmLines := s.Confirm.Render(width)
 		lines = append(lines, confirmLines...)
 		cursorLine = inputStart + max(len(confirmLines)-1, 0)
 		if len(confirmLines) > 0 {
 			cursorCol = min(DisplayWidth(confirmLines[len(confirmLines)-1]), max(width-1, 0))
 		}
-	} else {
+	case s.Settings != nil:
+		settingsLines := s.Settings.Render(width)
+		lines = append(lines, settingsLines...)
+		cursorLine = inputStart + len(settingsLines) - 1
+	default:
 		editorLines, row, col := s.Editor.Layout(width)
 		lines = append(lines, editorLines...)
 		cursorLine = inputStart + row

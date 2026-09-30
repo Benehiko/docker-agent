@@ -147,6 +147,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	// manager) start fresh trace ids per request rather than
 	// chaining onto the calling client's trace.
 	srv := http.Server{
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		Handler:           otelhttp.NewHandler(s.e, "agent-api"),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

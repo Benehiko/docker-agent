@@ -103,6 +103,8 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, opts ...options.Opt
 			case dmrmodels.IsNotInstalledError(err):
 				slog.DebugContext(ctx, "docker model status query failed", "error", err)
 				return nil, ErrNotInstalled
+			case dmrmodels.HasDockerConnection(ctx):
+				return nil, err
 			default:
 				// The `docker model` CLI is unusable (broken plugin, docker not on
 				// PATH, ...) but the DMR endpoint may still be up: check model

@@ -223,6 +223,13 @@ func Execute(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, arg
 	rootCmd.SetArgs(args)
 
 	runningStandalone := plugin.RunningStandalone()
+	if runningStandalone {
+		var err error
+		ctx, err = withDMRDockerConnection(ctx, nil, nil)
+		if err != nil {
+			return err
+		}
+	}
 
 	visitAll(rootCmd, func(cmd *cobra.Command) {
 		cmd.SetContext(ctx)
@@ -240,7 +247,7 @@ func Execute(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, arg
 		return rootCmd.Execute()
 	}
 
-	plugin.Run(func(command.Cli) *cobra.Command {
+	plugin.Run(func(dockerCLI command.Cli) *cobra.Command {
 		// Force to the name of the docker command
 		rootCmd.Use = "agent"
 
@@ -252,6 +259,11 @@ func Execute(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, arg
 			if err := plugin.PersistentPreRunE(cmd, args); err != nil {
 				return err
 			}
+			dmrCtx, err := withDMRDockerConnection(cmd.Context(), dockerCLI, cmd.Root().Flags())
+			if err != nil {
+				return err
+			}
+			visitAll(rootCmd, func(c *cobra.Command) { c.SetContext(dmrCtx) })
 			if originalPreRun != nil {
 				return originalPreRun(cmd, args)
 			}

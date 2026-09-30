@@ -10,19 +10,39 @@ _Run AI models locally with Docker — no API keys, no costs, full data privacy.
 
 ## Overview
 
-Docker Model Runner (DMR) lets you run open-source AI models directly on your machine. Models run in Docker, so there's no API key needed and no data leaves your computer.
+Docker Model Runner (DMR) lets you run open-source AI models directly on your machine. Models run in Docker, so there's no API key needed; with a local runner, prompts stay on your computer.
 
 Docker Agent automatically discovers models you have already pulled from DMR. When no model is explicitly configured, auto-selection prefers a locally-installed model (choosing the model specified via the `model:` key in the agent YAML if it is already pulled locally, or otherwise the first available non-embedding model) rather than always defaulting to `ai/qwen3:latest` and triggering a pull prompt.
 
 > [!TIP]
 > **No API key needed**
 >
-> DMR runs models locally — your data never leaves your machine. Great for development, sensitive data, or offline use.
+> With a local DMR endpoint, your data stays on your machine. Great for development, sensitive data, or offline use.
 
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) with the Model Runner feature enabled
 - Verify with: `docker model status --json`
+
+## Connection selection
+
+For Docker Desktop, `docker agent doctor` and DMR-backed agents use the Docker
+connection selected by the CLI, including `--context`, `--host`,
+`DOCKER_CONTEXT`, and `DOCKER_HOST`. Requests go through that engine's socket;
+enabling the
+legacy `/var/run/docker.sock` symlink is not required.
+
+```console
+docker --context desktop-linux agent doctor
+```
+
+The standalone `docker-agent` binary uses Docker's environment variables and
+current context. Status, model inspection, and pulls use the same selection.
+A failed selected Desktop connection is not replaced with a local runner.
+
+An explicit model `base_url` or `MODEL_RUNNER_HOST` bypasses local discovery;
+a models gateway also bypasses it for inference. If you select a remote engine,
+URL, or gateway, prompts are sent there rather than staying on your machine.
 
 ## Configuration
 
@@ -269,6 +289,19 @@ models:
 
 ## Troubleshooting
 
-- **Plugin not found:** Ensure Docker Model Runner is enabled in Docker Desktop. Docker Agent will fall back to the default URL.
+- **Plugin not found:** Ensure Docker Model Runner is enabled in Docker Desktop and `docker model status --json` works with the same Docker context. CLI discovery failures are reported rather than falling back to a different local runner.
 - **Endpoint empty:** Verify the Model Runner is running with `docker model status --json`.
 - **Performance:** Use `runtime_flags` to tune GPU layers (`--ngl`) and thread count (`--threads`).
+
+For interrupted or corrupt downloads, retry using the same Docker connection
+and config directory as the agent, for example:
+
+```console
+docker --context desktop-linux --config /path/to/docker-config model pull ai/qwen3
+```
+
+Docker Agent does not offer to delete local partial-download files when using a
+CLI-selected connection: the runner's content store may be remote or belong to a
+different Docker configuration. If a pull repeatedly fails with HTTP 416, inspect
+the selected runner's logs and content store rather than deleting files from an
+unrelated local `~/.docker/models` directory.

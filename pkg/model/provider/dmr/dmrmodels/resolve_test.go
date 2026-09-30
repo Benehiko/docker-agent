@@ -1,6 +1,9 @@
 package dmrmodels
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -76,4 +79,44 @@ func TestDMRConnectivity(t *testing.T) {
 		result := testDMRConnectivity(t.Context(), &http.Client{}, "http://127.0.0.1:59999/")
 		assert.False(t, result)
 	})
+}
+
+func TestResolvedDockerTransportRetainsConnection(t *testing.T) {
+	if inContainer() {
+		t.Skip("Desktop engine routing is host-only")
+	}
+	t.Setenv("MODEL_RUNNER_HOST", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/exp/vDD4.40/engines/v1/models", r.URL.Path)
+		_, _ = w.Write([]byte(`{"data":[{"id":"ai/test"}]}`))
+	}))
+	defer server.Close()
+	ctx := ContextWithDockerConnection(t.Context(), nil, func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	})
+	baseURL, client := ResolveBaseURL(ctx, nil, defaultContainerURL())
+	require.NotNil(t, client)
+	defer client.CloseIdleConnections()
+	models, err := ListModelsAt(t.Context(), client, baseURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ai/test"}, models)
+}
+
+func TestResolveSelectedDockerDoesNotProbeFallbacks(t *testing.T) {
+	if inContainer() {
+		t.Skip("Desktop engine routing is host-only")
+	}
+	t.Setenv("MODEL_RUNNER_HOST", "")
+	calls := 0
+	ctx := ContextWithDockerConnection(t.Context(), nil, func(context.Context) (net.Conn, error) {
+		calls++
+		return nil, errors.New("selected engine unavailable")
+	})
+	baseURL, client := ResolveBaseURL(ctx, nil, defaultContainerURL())
+	require.NotNil(t, client)
+	defer client.CloseIdleConnections()
+	assert.Zero(t, calls, "selection must not probe or switch to a local runner")
+	_, err := ListModelsAt(t.Context(), client, baseURL)
+	require.ErrorContains(t, err, "selected engine unavailable")
+	assert.Equal(t, 1, calls)
 }

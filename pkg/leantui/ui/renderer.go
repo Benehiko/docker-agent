@@ -179,20 +179,35 @@ func (r *Renderer) repaintVisible(newLines []string, cursorLine, cursorCol int) 
 	r.prev = newLines
 }
 
-// redrawSuffix emits changed offscreen rows before they become immutable scrollback.
+// redrawSuffix archives only changed offscreen rows, then restores the visible tail.
+// Scrollback is immutable; replaying the whole suffix would duplicate old answers.
 func (r *Renderer) redrawSuffix(newLines []string, first, cursorLine, cursorCol int) {
+	top := max(0, len(newLines)-r.height)
+	oldEnd, newEnd := len(r.prev), len(newLines)
+	for oldEnd > first && newEnd > first && r.prev[oldEnd-1] == newLines[newEnd-1] {
+		oldEnd--
+		newEnd--
+	}
+	var changed []string
+	for i := first; i < min(newEnd, top); i++ {
+		if i < r.viewportTop && i < len(r.prev) && r.prev[i] == newLines[i] {
+			continue
+		}
+		changed = append(changed, newLines[i])
+	}
 	var b strings.Builder
 	b.WriteString(seqSyncStart)
 	b.WriteString(seqHideCursor)
 	b.WriteString("\x1b[2J\x1b[H")
-	for i, line := range newLines[first:] {
+	rows := append(changed, newLines[top:]...)
+	for i, line := range rows {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
 		b.WriteString(seqEraseLine)
 		b.WriteString(line)
 	}
-	r.viewportTop = max(0, len(newLines)-r.height)
+	r.viewportTop = top
 	r.cursorRow = r.moveCursor(&b, len(newLines)-1, cursorLine, cursorCol)
 	b.WriteString(seqShowCursor)
 	b.WriteString(seqSyncEnd)

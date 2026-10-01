@@ -654,6 +654,25 @@ func StreamStopped(sessionID, agentName, reason string) Event {
 
 func (e *StreamStoppedEvent) GetSessionID() string { return e.SessionID }
 
+// SessionRecoveredEvent is an authoritative idle boundary after snapshot recovery.
+// Reset stream depth and transient interactions without running stop-triggered actions.
+type SessionRecoveredEvent struct {
+	AgentContext
+
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+}
+
+func SessionRecovered(sessionID string) Event {
+	return &SessionRecoveredEvent{
+		Type:         "session_recovered",
+		SessionID:    sessionID,
+		AgentContext: newAgentContext(""),
+	}
+}
+
+func (e *SessionRecoveredEvent) GetSessionID() string { return e.SessionID }
+
 // PausedEvent reports that the run loop has reached an iteration
 // boundary and is now blocked because /pause was toggled on. It is emitted
 // once the in-flight LLM request and its tool calls have finished — i.e. the

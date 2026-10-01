@@ -40,9 +40,10 @@ type activeRuntimes struct {
 	session  *session.Session        // The actual session object used by the runtime
 	titleGen *sessiontitle.Generator // Title generator (includes fallback models)
 
-	streaming   sync.Mutex  // Held while a RunStream is in progress; serialises concurrent requests
-	modelSwitch sync.Mutex  // Serialises model changes with manager-owned session persistence
-	deleting    atomic.Bool // Set before deletion waits for an in-flight model transaction
+	snapshotBoundary sync.Mutex  // Separates idle snapshot ownership from live turn state.
+	streaming        sync.Mutex  // Held while a RunStream is in progress; serialises concurrent requests
+	modelSwitch      sync.Mutex  // Serialises model changes with manager-owned session persistence
+	deleting         atomic.Bool // Set before deletion waits for an in-flight model transaction
 }
 
 // SessionManager manages sessions for HTTP and Connect-RPC servers.
@@ -551,15 +552,18 @@ func (sm *SessionManager) GetSessionSnapshot(ctx context.Context, id string) (*a
 	streaming := false
 	agentName := ""
 	if rs, ok := sm.runtimeSessions.Load(id); ok {
-		sess = rs.session
-		agentName = rs.runtime.CurrentAgentName(ctx)
-		// Probe streaming state without interfering: TryLock succeeds only
-		// when no RunStream is in progress.
+		rs.snapshotBoundary.Lock()
+		defer rs.snapshotBoundary.Unlock()
+		// Keep an idle turn stable until messages and cursor have been copied.
 		if rs.streaming.TryLock() {
-			rs.streaming.Unlock()
+			defer rs.streaming.Unlock()
 		} else {
 			streaming = true
 		}
+		rs.modelSwitch.Lock()
+		defer rs.modelSwitch.Unlock()
+		sess = rs.session
+		agentName = rs.runtime.CurrentAgentName(ctx)
 	}
 	if sess == nil {
 		var err error
@@ -570,6 +574,11 @@ func (sm *SessionManager) GetSessionSnapshot(ctx context.Context, id string) (*a
 	}
 
 	lastSeq, _ := sm.LastEventSeq(id)
+	sess = sess.Clone()
+	// Detached background events can advance the log even between turns.
+	if seq, _ := sm.LastEventSeq(id); seq != lastSeq {
+		streaming = true
+	}
 
 	title := sess.TitleSnapshot()
 	inputTokens, outputTokens := sess.Usage()
@@ -1377,7 +1386,10 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	if !exists {
 		return ErrSessionNotRunning
 	}
-	if !rt.streaming.TryLock() {
+	rt.snapshotBoundary.Lock()
+	acquired := rt.streaming.TryLock()
+	rt.snapshotBoundary.Unlock()
+	if !acquired {
 		return rt.runtime.Steer(ctx, msg)
 	}
 

@@ -1317,7 +1317,16 @@ func loadExternalAgent(ctx context.Context, ref string, runConfig *config.Runtim
 		return nil, err
 	}
 
-	return result.DefaultAgent()
+	imported, err := result.DefaultAgent()
+	if err != nil {
+		return nil, err
+	}
+	// Route targets live in the imported configuration and are not part of the
+	// importing team, so they could resolve to an unrelated agent of the same name.
+	if len(imported.Routing().AllowedAgents) > 0 {
+		return nil, fmt.Errorf("agent %q declares routing.allowed_agents; routed agents cannot be imported because their route targets are not part of the importing team", imported.Name())
+	}
+	return imported, nil
 }
 
 // inheritOptions carries a parent load's capability options (registries,

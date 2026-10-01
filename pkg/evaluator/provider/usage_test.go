@@ -68,6 +68,7 @@ func TestEvaluateUsagePresence(t *testing.T) {
 			result, err := client.Evaluate(ctx, "state")
 			if tt.wantErr {
 				require.ErrorContains(t, err, "invalid token usage")
+				assert.True(t, evaluator.IsTerminal(err), "invalid usage must not be recoverable")
 				assert.NotContains(t, err.Error(), "private-state")
 				assert.Nil(t, result)
 			} else {

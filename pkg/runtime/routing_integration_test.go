@@ -185,6 +185,26 @@ func TestRoutingExample_LowConfidenceAndOutagesUseDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestRoutingExample_InvalidJudgeUsageStopsInsteadOfFallingBack(t *testing.T) {
+	t.Parallel()
+	var requests []json.RawMessage
+	srv := judgeServer(t, &requests, func() (int, string) {
+		payload := strings.Replace(judgeAnswer("complex", 0.92),
+			`"usage":{"input_tokens":20,"output_tokens":2}`, `"usage":{"input_tokens":-5,"output_tokens":2}`, 1)
+		return http.StatusOK, payload
+	})
+	rt, providers := routedExample(t, srv)
+
+	sess := session.New(session.WithUserMessage("help"), session.WithNonInteractive(true))
+	events := runRouted(t, rt, sess)
+
+	require.Len(t, routedErrors(events), 1, "invalid accounting must stop the run")
+	assert.Empty(t, routeEvents(events), "no route, not even the default agent")
+	for model, p := range providers {
+		assert.Zero(t, p.calls.Load(), "%s must not run", model)
+	}
+}
+
 func TestRoutingExample_StrictLoadRequiresRoutingFeature(t *testing.T) {
 	t.Parallel()
 	source, err := os.ReadFile(filepath.Join("..", "..", "examples", "hook_routing.yaml"))

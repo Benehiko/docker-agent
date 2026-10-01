@@ -387,6 +387,9 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 
 	// Routed conversations restart at the entry agent and let before_agent_run
 	// pick the agent that actually runs, before anything is prepared for it.
+	// Routing appends decision items before the user event is emitted, so
+	// the user's position must be captured first.
+	userPosition := sess.ItemCount() - 1
 	route := r.beginRouting(sess)
 	a := r.resolveSessionAgent(sess)
 	var stop *routeStop
@@ -465,7 +468,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// signal here too: "a real user prompt is at the tail of the session".
 	if sess.SendUserMessage && len(messages) > 0 {
 		lastMsg := messages[len(messages)-1]
-		sink.Emit(userMessageEvent(lastMsg, sess.ID, sess.ItemCount()-1))
+		sink.Emit(userMessageEvent(lastMsg, sess.ID, userPosition))
 
 		// user_prompt_submit fires once per real user message, after
 		// session_start and before the first model call.

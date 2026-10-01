@@ -1359,6 +1359,9 @@ Checked when the configuration loads, after global and drop-in hooks are merged:
   de-duplicated. Different selectors are an error; completion order never decides.
 - `routing.allowed_agents` lists declared local agents (no self, no duplicates, no
   harness agents, no external references). `default_agent` must be one of them.
+- An agent that declares `routing` cannot be imported from another configuration
+  (`sub_agents: [name:ref]`): its route targets belong to its own configuration, so
+  loading fails instead of resolving them against the importing team.
 - `after_agent_complete` cannot be combined with `force_handoff` on the same agent.
   Use `force_handoff` for unconditional continuation.
 - Statically possible routes and `force_handoff` edges must not form a cycle, and the

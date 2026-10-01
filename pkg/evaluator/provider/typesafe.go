@@ -142,7 +142,8 @@ func (p *typesafe) Evaluate(ctx context.Context, state any) (*evaluator.Result, 
 		return nil, errors.New("evaluator response is missing the model")
 	}
 	if usageErr != nil {
-		return nil, usageErr
+		// Accounting cannot be trusted, so this must end the run instead of falling back.
+		return nil, &evaluator.TerminalError{Err: usageErr}
 	}
 	return p.result(response.Answers, record)
 }

@@ -78,8 +78,25 @@ func TestLoadRoutedImportKeepsItsOwnEvaluatorBindings(t *testing.T) {
 	childServer, childRequests := choiceServer(t, "no")
 
 	parentYAML := routedConfig(parentServer.URL) + "    sub_agents: [child:example/imported]\n"
-	// The imported agent's default agent is its first one; give it its own routed team.
-	childYAML := routedConfig(childServer.URL)
+	// Routed agents cannot be imported, so the child only declares the evaluator.
+	childYAML := fmt.Sprintf(`
+evaluators:
+  task_route:
+    provider: typesafe
+    base_url: %s
+    token_key: ROUTE_KEY
+    model: jev
+    type: choice
+    instructions: Pick a route.
+    choices:
+      yes: Route onward
+      no: Stay
+agents:
+  root:
+    model: openai/gpt-4o
+    description: imported
+    instruction: test
+`, childServer.URL)
 
 	loaded, err := LoadWithConfig(t.Context(), config.NewBytesSource("parent.yaml", []byte(parentYAML)), &config.RuntimeConfig{
 		EnvProviderForTests: environment.NewMapEnvProvider(map[string]string{
@@ -133,4 +150,22 @@ func TestLoadRoutingRejectsExternalTargets(t *testing.T) {
 	}))...)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown local agent")
+}
+
+// An imported agent's route targets belong to its own configuration, so a
+// routed import is rejected instead of resolving them against the parent team.
+func TestLoadRejectsRoutedImport(t *testing.T) {
+	t.Parallel()
+
+	server, _ := choiceServer(t, "yes")
+	// The parent declares its own "helper", which the import must never reach.
+	parentYAML := routedConfig(server.URL) + "    sub_agents: [child:example/imported]\n"
+
+	_, err := LoadWithConfig(t.Context(), config.NewBytesSource("parent.yaml", []byte(parentYAML)), &config.RuntimeConfig{
+		EnvProviderForTests: environment.NewMapEnvProvider(map[string]string{"OPENAI_API_KEY": "fake-chat-key", "ROUTE_KEY": "secret"}),
+	}, withTestProviderRegistry(WithSourceResolver(func(string, environment.Provider) (config.Source, error) {
+		return config.NewBytesSource("child.yaml", []byte(routedConfig(server.URL))), nil
+	}))...)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "routed agents cannot be imported")
 }

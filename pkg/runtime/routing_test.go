@@ -704,3 +704,20 @@ func TestRouting_PlainAgentsKeepSharedHandoffBehavior(t *testing.T) {
 	assert.Equal(t, "summarizer", rt.CurrentAgentName(t.Context()))
 	assert.Equal(t, 1, sumProv.handoffCallCount())
 }
+
+func TestRouting_UserMessageEventKeepsTheUserPosition(t *testing.T) {
+	t.Parallel()
+	f := newEvaluatorRoutingFixture(t, scriptedAnswer{result: choiceResult("complex", defaultProbabilities("complex", 0.9))})
+
+	sess := session.New(session.WithUserMessage("Diagnose this deadlock"), session.WithNonInteractive(true))
+	events := runRouted(t, f.rt, sess)
+
+	require.NotEmpty(t, routeEvents(events), "the conversation must have been routed")
+	var positions []int
+	for _, ev := range events {
+		if ue, ok := ev.(*UserMessageEvent); ok {
+			positions = append(positions, ue.SessionPosition)
+		}
+	}
+	assert.Equal(t, []int{0}, positions, "routing items appended before the event must not shift the user's position")
+}

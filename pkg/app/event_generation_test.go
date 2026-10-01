@@ -89,3 +89,68 @@ func TestRoutingRetainsOriginWhenRetirementRacesMapping(t *testing.T) {
 		require.False(t, a.IsEventGeneration(got[0].(delivery).generation), "the consumer must reject an event accepted just before retirement")
 	})
 }
+
+type contextualEventsRuntime struct {
+	mockRuntime
+
+	background  func(context.Context, runtime.Event)
+	elicitation func(context.Context, runtime.Event)
+}
+
+func (r *contextualEventsRuntime) OnBackgroundEventWithContext(handler func(context.Context, runtime.Event)) {
+	r.background = handler
+}
+
+func (r *contextualEventsRuntime) OnElicitationRequestWithContext(handler func(context.Context, runtime.Event)) {
+	r.elicitation = handler
+}
+
+func TestDetachedCallbacksKeepOriginAcrossReplacement(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rt := &contextualEventsRuntime{}
+		a := New(ctx, rt, session.New())
+		a.Start(ctx)
+		var got []tea.Msg
+		ready := make(chan struct{})
+		go a.SubscribeReliable(ctx, func(msg tea.Msg) { got = append(got, msg) }, WithSubscriptionReady(func() { close(ready) }))
+		<-ready
+		old := a.eventContext(ctx)
+		a.ReplaceSession(ctx, session.New())
+		rt.background(old, runtime.StreamStopped("old-child", "root", "normal"))
+		rt.elicitation(old, runtime.ElicitationRequest("OLD REQUEST", "form", nil, "", "old", "", "old-child", nil, "root"))
+		current := a.eventContext(ctx)
+		request := runtime.ElicitationRequest("CURRENT REQUEST", "form", nil, "", "new", "", "new-child", nil, "root")
+		rt.elicitation(current, request)
+		synctest.Wait()
+		require.Equal(t, []tea.Msg{request}, got)
+	})
+}
+
+func TestCanceledDetachedAccountingStillDeliversWithOriginalGeneration(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rt := &contextualEventsRuntime{}
+		a := New(ctx, rt, session.New())
+		a.Start(ctx)
+		var got []tea.Msg
+		ready := make(chan struct{})
+		go a.SubscribeReliable(ctx, func(msg tea.Msg) { got = append(got, msg) }, WithSubscriptionReady(func() { close(ready) }))
+		<-ready
+		origin, stop := context.WithCancel(a.eventContext(ctx))
+		stop()
+		for range 100 {
+			rt.background(origin, runtime.NewTokenUsageEvent("child", "root", &runtime.Usage{}))
+		}
+		synctest.Wait()
+		require.Len(t, got, 100)
+		a.RetireEvents()
+		rt.background(origin, runtime.NewTokenUsageEvent("child", "root", &runtime.Usage{}))
+		synctest.Wait()
+		require.Len(t, got, 100)
+	})
+}

@@ -404,3 +404,15 @@ func TestDirectElicitationHandlerBypassesEventsAndHonorsHeadless(t *testing.T) {
 		require.NoError(t, rt.Close())
 	}
 }
+
+func TestContextualElicitationPreservesProducerContext(t *testing.T) {
+	t.Parallel()
+	rt := &LocalRuntime{}
+	type ownerKey struct{}
+	origin := context.WithValue(t.Context(), ownerKey{}, "original-conversation")
+	var observed string
+	rt.OnElicitationRequestWithContext(func(ctx context.Context, event Event) { observed = ctx.Value(ownerKey{}).(string) })
+	rt.emitElicitationRequestContext(origin, ElicitationRequest("request", "form", nil, "", "id", "", "child", nil, "root"))
+	require.Equal(t, "original-conversation", observed)
+	require.True(t, rt.hasElicitationSink())
+}

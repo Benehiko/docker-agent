@@ -467,7 +467,7 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	var errMsg string
 	events := r.RunStream(ctx, s)
 	for event := range events {
-		r.forwardBackgroundUsage(event)
+		r.forwardBackgroundUsage(ctx, event)
 		if ctx.Err() != nil {
 			break
 		}
@@ -493,7 +493,7 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// Drain remaining events so the RunStream goroutine can complete and
 	// close the channel without blocking on a full buffer.
 	for event := range events {
-		r.forwardBackgroundUsage(event)
+		r.forwardBackgroundUsage(ctx, event)
 	}
 
 	// Emit one authoritative final snapshot before the child
@@ -511,7 +511,7 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 		// usageCtx: the context-limit lookup must still resolve for a
 		// cancelled task.
 		finalUsage.ContextLimit = r.contextLimitForAgentModel(usageCtx, child, r.getEffectiveModelID(usageCtx, child))
-		r.emitBackgroundEvent(NewTokenUsageEvent(s.ID, cfg.AgentName, finalUsage))
+		r.emitBackgroundEvent(ctx, NewTokenUsageEvent(s.ID, cfg.AgentName, finalUsage))
 	}
 
 	// Persist the sub-session unconditionally — the partial transcript is
@@ -828,9 +828,9 @@ func (r *LocalRuntime) applyForceHandoff(ctx context.Context, sess *session.Sess
 }
 
 // Preserve accounting during cancellation drains, including nested children.
-func (r *LocalRuntime) forwardBackgroundUsage(event Event) {
+func (r *LocalRuntime) forwardBackgroundUsage(ctx context.Context, event Event) {
 	switch event.(type) {
 	case *TokenUsageEvent, *EvaluationUsageEvent:
-		r.emitBackgroundEvent(event)
+		r.emitBackgroundEvent(ctx, event)
 	}
 }

@@ -353,6 +353,15 @@ func (r *LocalRuntime) OnElicitationRequest(handler func(Event)) {
 	r.elicitationSinkMu.Lock()
 	defer r.elicitationSinkMu.Unlock()
 	r.onElicitationRequest = handler
+	r.onElicitationContext = nil
+}
+
+// OnElicitationRequestWithContext preserves the originating run's ownership.
+func (r *LocalRuntime) OnElicitationRequestWithContext(handler func(context.Context, Event)) {
+	r.elicitationSinkMu.Lock()
+	defer r.elicitationSinkMu.Unlock()
+	r.onElicitationContext = handler
+	r.onElicitationRequest = nil
 }
 
 // MirrorsElicitationOnRunStream marks LocalRuntime as a runtime whose
@@ -381,8 +390,26 @@ func (r *LocalRuntime) MirrorsElicitationOnRunStream() {}
 // previously required a stateful App-side dedupe to paper over).
 func (r *LocalRuntime) emitElicitationRequest(event Event) {
 	r.elicitationSinkMu.RLock()
-	handler := r.onElicitationRequest
+	handler, contextual := r.onElicitationRequest, r.onElicitationContext
 	r.elicitationSinkMu.RUnlock()
+	if contextual != nil {
+		contextual(context.Background(), event)
+		return
+	} // Test seam has no originating run.
+	if handler != nil {
+		handler(event)
+	}
+}
+
+func (r *LocalRuntime) emitElicitationRequestContext(ctx context.Context, event Event) {
+	r.elicitationSinkMu.RLock()
+	handler := r.onElicitationRequest
+	contextual := r.onElicitationContext
+	r.elicitationSinkMu.RUnlock()
+	if contextual != nil {
+		contextual(ctx, event)
+		return
+	}
 	if handler != nil {
 		handler(event)
 	}
@@ -407,7 +434,7 @@ func (r *LocalRuntime) EmitElicitationRequestForTesting(event Event) {
 func (r *LocalRuntime) hasElicitationSink() bool {
 	r.elicitationSinkMu.RLock()
 	defer r.elicitationSinkMu.RUnlock()
-	return r.onElicitationRequest != nil
+	return r.onElicitationRequest != nil || r.onElicitationContext != nil
 }
 
 // elicitationDeclineNotes accumulates model-readable notes for elicitations
@@ -571,7 +598,7 @@ func (r *LocalRuntime) requestElicitation(ctx context.Context, spec elicitationS
 	// Reliable delivery: invoked synchronously, unconditionally, and exactly
 	// once, BEFORE anything that could block (#3584 review item 1). This
 	// must never be gated behind the best-effort bridge below.
-	r.emitElicitationRequest(ev)
+	r.emitElicitationRequestContext(ctx, ev)
 
 	// Best-effort secondary delivery on the owning stream's events channel,
 	// kept for remote/SSE consumers that read directly off RunStream

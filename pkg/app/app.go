@@ -202,9 +202,18 @@ func (a *App) Start(ctx context.Context) {
 		if _, ok := a.runtime.(interface{ RetireBackgroundEvents() }); ok {
 			backgroundCtx = a.eventContext(ctx)
 		}
-		a.runtime.OnBackgroundEvent(func(event runtime.Event) {
-			a.sendEvent(backgroundCtx, event)
-		})
+		if contextual, ok := a.runtime.(interface {
+			OnBackgroundEventWithContext(handler func(context.Context, runtime.Event))
+		}); ok {
+			contextual.OnBackgroundEventWithContext(func(origin context.Context, event runtime.Event) {
+				if origin == nil {
+					origin = ctx
+				}
+				a.sendEvent(context.WithoutCancel(origin), event)
+			})
+		} else {
+			a.runtime.OnBackgroundEvent(func(event runtime.Event) { a.sendEvent(backgroundCtx, event) })
+		}
 
 		// Forward elicitation requests raised anywhere in the runtime —
 		// including background-job (run_background_agent) sub-sessions whose
@@ -218,9 +227,18 @@ func (a *App) Start(ctx context.Context) {
 		// don't mirror it (RemoteRuntime, whose OnElicitationRequest below is
 		// a no-op) deliver elicitations only through that RunStream copy,
 		// which those loops forward unfiltered (#3584 review).
-		a.runtime.OnElicitationRequest(func(event runtime.Event) {
-			a.sendEvent(ctx, event)
-		})
+		if contextual, ok := a.runtime.(interface {
+			OnElicitationRequestWithContext(handler func(context.Context, runtime.Event))
+		}); ok {
+			contextual.OnElicitationRequestWithContext(func(origin context.Context, event runtime.Event) {
+				if origin == nil {
+					origin = ctx
+				}
+				a.sendEvent(origin, event)
+			})
+		} else {
+			a.runtime.OnElicitationRequest(func(event runtime.Event) { a.sendEvent(ctx, event) })
+		}
 	})
 }
 
@@ -1210,7 +1228,7 @@ func (a *App) startFanOut() {
 					}
 				}
 				if sub.queue != nil {
-					sub.queue.push(delivery)
+					sub.queue.pushGeneration(delivery, generation)
 					continue
 				}
 				ch := sub.ch

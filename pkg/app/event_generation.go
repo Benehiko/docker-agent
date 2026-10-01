@@ -17,7 +17,14 @@ type generationEvent struct {
 
 // RetireEvents discards deliveries belonging to a replaced conversation.
 func (a *App) RetireEvents() {
-	a.eventGeneration.Add(1)
+	generation := a.eventGeneration.Add(1)
+	a.subsMu.Lock()
+	for _, sub := range a.subs {
+		if sub.queue != nil {
+			sub.queue.retire(generation)
+		}
+	}
+	a.subsMu.Unlock()
 	if retire, ok := a.runtime.(interface{ RetireBackgroundEvents() }); ok {
 		retire.RetireBackgroundEvents()
 		ctx := a.eventContext(a.ctx())

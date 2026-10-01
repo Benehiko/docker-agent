@@ -322,6 +322,9 @@ func (t *Toolset) validate() error {
 	if err := validateNonEmptyEntries("blocked_servers", t.BlockedServers); err != nil {
 		return err
 	}
+	if t.MaxOutputBytes != nil && t.Type != "openapi" {
+		return errors.New("max_output_bytes can only be used with type 'openapi'")
+	}
 	if t.EscapeHTML != nil && t.Type != "fetch" {
 		return errors.New("escape_html can only be used with type 'fetch'")
 	}
@@ -458,6 +461,9 @@ func (t *Toolset) validate() error {
 	case "openapi":
 		if t.URL == "" {
 			return errors.New("openapi toolset requires a url to be set")
+		}
+		if t.MaxOutputBytes != nil && *t.MaxOutputBytes < 0 {
+			return errors.New("max_output_bytes must not be negative")
 		}
 	case "open_url":
 		if t.URL == "" {

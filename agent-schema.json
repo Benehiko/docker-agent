@@ -2452,6 +2452,12 @@
           "description": "HTTP timeout in seconds (valid for type 'fetch', 'api', and 'openapi'). Defaults to 30 seconds when omitted.",
           "minimum": 1
         },
+        "max_output_bytes": {
+          "type": "integer",
+          "description": "Maximum OpenAPI text output in bytes (only valid for type 'openapi'). Defaults to 30000 when omitted; 0 disables the text cutoff.",
+          "minimum": 0,
+          "default": 30000
+        },
         "escape_html": {
           "type": "boolean",
           "description": "Restore legacy HTML escaping of <, > and & in multi-URL JSON results (only valid for type 'fetch'). Defaults to false to reduce token usage. Decoded content and single-URL results are unchanged.",
@@ -2576,6 +2582,21 @@
         }
       },
       "additionalProperties": false,
+      "if": {
+        "required": [
+          "max_output_bytes"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "openapi"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
       "anyOf": [
         {
           "allOf": [

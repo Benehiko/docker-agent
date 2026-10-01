@@ -228,6 +228,9 @@ func (h *backgroundJobsHandler) RunBackgroundJobWithRecall(ctx context.Context, 
 }
 
 func (h *backgroundJobsHandler) runBackgroundJob(ctx context.Context, rt tools.Runtime, params runBackgroundJobParams) (*tools.ToolCallResult, error) {
+	if blocked, _ := ctx.Value(noBackgroundJobsKey{}).(bool); blocked {
+		return nil, errors.New("background jobs are not supported by this host; use the shell tool for synchronous commands")
+	}
 	if strings.TrimSpace(params.Cmd) == "" {
 		return tools.ResultError(`Error: missing or empty "cmd" parameter. Pass the shell command as {"cmd": "..."}.`), nil
 	}

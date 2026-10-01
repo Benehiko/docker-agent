@@ -29,6 +29,8 @@ type Contract struct {
 	Context            bool
 	Instructions       bool
 	Summary            bool
+	// Control events let a hook select the next agent via a route transition.
+	Control bool
 }
 
 // Sequential reports whether each hook must receive the preceding rewrite.
@@ -66,6 +68,8 @@ var contracts = []Contract{
 	{Name: "tool_input_transform", ToolMatched: true, CanBlock: true, Rewrite: RewriteToolInput},
 	{Name: "tool_guard", ToolMatched: true, CanBlock: true, FailClosed: true, Decision: true, Metadata: true},
 	{Name: "worktree_create", CanBlock: true, Context: true},
+	{Name: "before_agent_run", CanBlock: true, FailClosed: true, Metadata: true, Control: true},
+	{Name: "after_agent_complete", CanBlock: true, FailClosed: true, Metadata: true, Control: true},
 	{Name: "skill_content_guard", CanBlock: true, FailClosed: true},
 	{Name: "prompt_file_guard", CanBlock: true, FailClosed: true},
 }

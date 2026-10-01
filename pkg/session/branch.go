@@ -111,6 +111,7 @@ func (s *Session) Clone() *Session {
 		AgentName:               s.AgentName,
 		allowAgentHandoffs:      s.allowAgentHandoffs,
 		handoffAgent:            s.handoffAgent,
+		routed:                  s.routed,
 		ParentID:                s.ParentID,
 		DelegationLineage:       cloneStringSlice(s.DelegationLineage),
 		InstructionContext:      cloneInstructionContext(s.InstructionContext),
@@ -146,6 +147,7 @@ func (s *Session) Clone() *Session {
 		}
 		clone.Messages[i].Compaction = item.Compaction.Clone()
 		clone.Messages[i].Evaluation = cloneEvaluation(item.Evaluation)
+		clone.Messages[i].RoutingDecision = cloneRoutingDecision(item.RoutingDecision)
 	}
 	return clone
 }
@@ -173,6 +175,8 @@ func cloneSessionItem(item Item) (Item, error) {
 		return cloned, nil
 	case item.Evaluation != nil:
 		return Item{Evaluation: cloneEvaluation(item.Evaluation)}, nil
+	case item.RoutingDecision != nil:
+		return Item{RoutingDecision: cloneRoutingDecision(item.RoutingDecision)}, nil
 	case item.Error != nil:
 		errCopy := *item.Error
 		return Item{Error: &errCopy}, nil

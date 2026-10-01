@@ -111,6 +111,8 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 			"team_info":              func() Event { return &TeamInfoEvent{} },
 			"toolset_info":           func() Event { return &ToolsetInfoEvent{} },
 			"agent_switching":        func() Event { return &AgentSwitchingEvent{} },
+			"agent_route":            func() Event { return &AgentRouteEvent{} },
+			"routing_decision":       func() Event { return &RoutingDecisionEvent{} },
 			"warning":                func() Event { return &WarningEvent{} },
 			"hook_blocked":           func() Event { return &HookBlockedEvent{} },
 			"hook_started":           func() Event { return &HookStartedEvent{} },

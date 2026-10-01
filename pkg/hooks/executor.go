@@ -249,6 +249,9 @@ func annotateHookSpan(span trace.Span, event EventType, r *Result) {
 	if r.Summary != "" {
 		attrs = append(attrs, attribute.Bool("cagent.hook.summary_provided", true))
 	}
+	if r.Transition != nil {
+		attrs = append(attrs, attribute.String("cagent.hook.transition_agent", r.Transition.Agent))
+	}
 	if genai.IsContentCaptureEnabled() {
 		if r.Message != "" {
 			attrs = append(attrs, attribute.String("cagent.hook.message", r.Message))
@@ -298,6 +301,7 @@ func sameHook(a, b Hook) bool {
 		a.Model == b.Model &&
 		a.Evaluator == b.Evaluator &&
 		sameEvaluatorPolicy(a.EvaluatorPolicy, b.EvaluatorPolicy) &&
+		sameRoutingPolicy(a.RoutingPolicy, b.RoutingPolicy) &&
 		a.Prompt == b.Prompt &&
 		a.SystemPrompt == b.SystemPrompt &&
 		a.Schema == b.Schema
@@ -332,6 +336,8 @@ func (e *Executor) runHook(ctx context.Context, event EventType, hook Hook, inpu
 			}
 		}()
 	}
+	// Control output selects the next agent, so it is never parsed permissively.
+	strict := hook.StrictOutput || EventContract(event).Control
 	factory, ok := e.registry.Lookup(hook.Type)
 	if !ok {
 		return hookResult{hook: hook, err: fmt.Errorf("unsupported hook type: %s", hook.Type)}
@@ -379,7 +385,7 @@ func (e *Executor) runHook(ctx context.Context, event EventType, hook Hook, inpu
 		if contentGuard {
 			r.Output, err = parseContentGuardOutput(r.Stdout)
 		} else {
-			r.Output, err = parseStdoutJSON(r.Stdout, hook.StrictOutput)
+			r.Output, err = parseStdoutJSON(r.Stdout, strict)
 		}
 		if err != nil {
 			return markFailed(err)
@@ -394,7 +400,7 @@ func (e *Executor) runHook(ctx context.Context, event EventType, hook Hook, inpu
 		}
 	}
 	if r.Output != nil && r.ExitCode == 0 {
-		if err := validateOutput(event, r.Output, hook.StrictOutput || contentGuard); err != nil {
+		if err := validateOutput(event, r.Output, strict || contentGuard); err != nil {
 			return markFailed(err)
 		}
 	}
@@ -499,6 +505,16 @@ func aggregate(results []hookResult, event EventType) *Result {
 					}
 				}
 			}
+			if contract.Control && hso.Transition != nil {
+				switch {
+				case final.Transition == nil:
+					transition := *hso.Transition
+					final.Transition = &transition
+				case *final.Transition != *hso.Transition:
+					final.Allowed = false
+					messages = append(messages, contract.Name+" hooks returned conflicting route transitions")
+				}
+			}
 			if contract.Rewrite == events.RewriteToolInput && hso.UpdatedInput != nil {
 				if final.ModifiedInput == nil {
 					final.ModifiedInput = make(map[string]any)
@@ -543,6 +559,9 @@ func aggregate(results []hookResult, event EventType) *Result {
 		}
 	}
 
+	if !final.Allowed {
+		final.Transition = nil
+	}
 	final.Message = strings.Join(messages, "\n")
 	final.AdditionalContext = strings.Join(contexts, "\n")
 	final.SystemMessage = strings.Join(sysMsgs, "\n")

@@ -38,6 +38,8 @@ var onlyHooks = map[EventType]*Config{
 	EventAfterCompaction:    {AfterCompaction: trueHook},
 	EventToolInputTransform: {ToolInputTransform: matcherWildcard},
 	EventToolGuard:          {ToolGuard: matcherWildcard},
+	EventBeforeAgentRun:     {BeforeAgentRun: trueHook},
+	EventAfterAgentComplete: {AfterAgentComplete: trueHook},
 }
 
 // TestExecutorHasIsGeneric exercises the generic Has API across every

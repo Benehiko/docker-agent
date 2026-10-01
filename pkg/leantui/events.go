@@ -170,6 +170,8 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		if e.Switching && e.ToAgent != "" {
 			m.addNotice("→ ", "Switching to "+e.ToAgent, ui.StMuted())
 		}
+	case *runtime.AgentRouteEvent:
+		m.addNotice("→ ", "Routing to "+e.ToAgent, ui.StMuted())
 	case *runtime.MaxIterationsReachedEvent:
 		m.addNotice("⚠ ", "Maximum iterations reached.", ui.StWarning())
 	case *runtime.ModelFallbackEvent:

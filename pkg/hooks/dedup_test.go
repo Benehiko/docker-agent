@@ -56,6 +56,7 @@ func TestHookIdentityIncludesEveryField(t *testing.T) {
 	changes := map[string]func(*Hook){
 		"Evaluator":       func(h *Hook) { h.Evaluator = "other" },
 		"EvaluatorPolicy": func(h *Hook) { h.EvaluatorPolicy = &latest.EvaluatorPolicy{Fallback: "ask"} },
+		"RoutingPolicy":   func(h *Hook) { h.RoutingPolicy = &latest.RoutingPolicy{MinProbability: 0.5} },
 		"Name":            func(h *Hook) { h.Name = "other" },
 		"Type":            func(h *Hook) { h.Type = HookTypeCommand },
 		"Command":         func(h *Hook) { h.Command = "other" },

@@ -139,6 +139,7 @@ type Store interface {
 
 	// AddEvaluation appends evaluator usage once per evaluation ID.
 	AddEvaluation(ctx context.Context, sessionID string, e *Evaluation) error
+	AddRoutingDecision(ctx context.Context, sessionID string, decision *RoutingDecision) error
 
 	// === Granular metadata updates ===
 
@@ -502,6 +503,18 @@ func (s *InMemorySessionStore) AddError(_ context.Context, sessionID string, e *
 	return nil
 }
 
+func (s *InMemorySessionStore) AddRoutingDecision(_ context.Context, sessionID string, decision *RoutingDecision) error {
+	if sessionID == "" {
+		return ErrEmptyID
+	}
+	sess, exists := s.sessions.Load(sessionID)
+	if !exists {
+		return ErrNotFound
+	}
+	sess.AddRoutingDecision(decision)
+	return nil
+}
+
 func (s *InMemorySessionStore) AddEvaluation(_ context.Context, sessionID string, e *Evaluation) error {
 	if sessionID == "" {
 		return ErrEmptyID
@@ -600,6 +613,26 @@ func sessionPersistedFieldsOf(session *Session) (sessionPersistedFields, error) 
 	}
 
 	return f, nil
+}
+
+// AddRoutingDecision appends a control-decision record once per decision ID.
+func (s *SQLiteSessionStore) AddRoutingDecision(ctx context.Context, sessionID string, decision *RoutingDecision) error {
+	if sessionID == "" {
+		return ErrEmptyID
+	}
+	if decision == nil {
+		return nil
+	}
+	decisionJSON, err := json.Marshal(decision)
+	if err != nil {
+		return fmt.Errorf("marshaling routing decision: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO session_items (session_id, position, item_type, message_json)
+		 SELECT ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM session_items WHERE session_id = ?), 'routing_decision', ?
+		 WHERE NOT EXISTS (SELECT 1 FROM session_items WHERE session_id = ? AND item_type = 'routing_decision' AND json_extract(message_json, '$.id') = ?)`,
+		sessionID, sessionID, string(decisionJSON), sessionID, decision.ID)
+	return err
 }
 
 // UpdateSessionTokens updates only token/cost fields.
@@ -908,6 +941,13 @@ func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, se
 				return nil, fmt.Errorf("unmarshaling evaluation at position %d: %w", row.position, err)
 			}
 			items = append(items, Item{Evaluation: &evaluation})
+
+		case "routing_decision":
+			var decision RoutingDecision
+			if err := json.Unmarshal([]byte(row.messageJSON.String), &decision); err != nil {
+				return nil, fmt.Errorf("unmarshaling routing decision at position %d: %w", row.position, err)
+			}
+			items = append(items, Item{RoutingDecision: &decision})
 
 		case "error":
 			var e Error
@@ -1418,6 +1458,17 @@ func (s *SQLiteSessionStore) addItemTx(ctx context.Context, tx *sql.Tx, sessionI
 			`INSERT INTO session_items (session_id, position, item_type, message_json)
 			 VALUES (?, ?, 'evaluation', ?)`,
 			sessionID, position, string(evaluationJSON))
+		return err
+
+	case item.RoutingDecision != nil:
+		decisionJSON, err := json.Marshal(item.RoutingDecision)
+		if err != nil {
+			return fmt.Errorf("marshaling routing decision: %w", err)
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO session_items (session_id, position, item_type, message_json)
+			 VALUES (?, ?, 'routing_decision', ?)`,
+			sessionID, position, string(decisionJSON))
 		return err
 
 	case item.Error != nil:

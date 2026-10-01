@@ -610,6 +610,18 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			}
 			agent.WithForceHandoff(targets[0])(a)
 		}
+
+		if agentConfig.Routing != nil {
+			for _, name := range agentConfig.Routing.AllowedAgents {
+				if _, exists := agentsByName[name]; !exists {
+					return nil, fmt.Errorf("agent '%s': routing.allowed_agents references unknown local agent '%s'", agentConfig.Name, name)
+				}
+			}
+			agent.WithRouting(agent.Routing{
+				AllowedAgents: agentConfig.Routing.AllowedAgents,
+				DefaultAgent:  agentConfig.Routing.DefaultAgent,
+			})(a)
+		}
 	}
 
 	// Create permissions checker from config
@@ -1305,7 +1317,16 @@ func loadExternalAgent(ctx context.Context, ref string, runConfig *config.Runtim
 		return nil, err
 	}
 
-	return result.DefaultAgent()
+	imported, err := result.DefaultAgent()
+	if err != nil {
+		return nil, err
+	}
+	// Route targets live in the imported configuration and are not part of the
+	// importing team, so they could resolve to an unrelated agent of the same name.
+	if len(imported.Routing().AllowedAgents) > 0 {
+		return nil, fmt.Errorf("agent %q declares routing.allowed_agents; routed agents cannot be imported because their route targets are not part of the importing team", imported.Name())
+	}
+	return imported, nil
 }
 
 // inheritOptions carries a parent load's capability options (registries,

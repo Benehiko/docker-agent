@@ -82,7 +82,7 @@ func (p *PersistenceObserver) OnEvent(ctx context.Context, sess *session.Session
 
 	// Accounting for an attempted request must survive cancellation of the run.
 	switch event.(type) {
-	case *EvaluationUsageEvent, *TokenUsageEvent, *SubSessionCompletedEvent:
+	case *EvaluationUsageEvent, *RoutingDecisionEvent, *TokenUsageEvent, *SubSessionCompletedEvent:
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -148,6 +148,11 @@ func (p *PersistenceObserver) OnEvent(ctx context.Context, sess *session.Session
 	case *EvaluationUsageEvent:
 		if err := p.store.AddEvaluation(ctx, e.SessionID, e.Evaluation); err != nil {
 			slog.WarnContext(ctx, "Failed to persist evaluator usage", "session_id", e.SessionID, "error", err)
+		}
+
+	case *RoutingDecisionEvent:
+		if err := p.store.AddRoutingDecision(ctx, e.SessionID, e.Decision); err != nil {
+			slog.WarnContext(ctx, "Failed to persist routing decision", "session_id", e.SessionID, "error", err)
 		}
 
 	case *TokenUsageEvent:

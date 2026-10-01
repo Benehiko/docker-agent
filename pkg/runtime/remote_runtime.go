@@ -1412,6 +1412,11 @@ func (s *RemoteSessionStore) AddEvaluation(context.Context, string, *session.Eva
 	return nil
 }
 
+// AddRoutingDecision is a no-op: the server persists runtime routing events.
+func (s *RemoteSessionStore) AddRoutingDecision(context.Context, string, *session.RoutingDecision) error {
+	return nil
+}
+
 func (s *RemoteSessionStore) UpdateSessionTokens(context.Context, string, int64, int64, float64) error {
 	return fmt.Errorf("update session tokens: %w", ErrUnsupported)
 }

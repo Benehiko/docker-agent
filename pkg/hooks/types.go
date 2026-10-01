@@ -221,6 +221,29 @@ const (
 	//
 	// Tool-scoped: matchers select which tools the hook runs against.
 	EventToolGuard EventType = "tool_guard"
+	// EventBeforeAgentRun fires once per agent activation, before the
+	// runtime selects the agent's model or replays its response cache. A
+	// route transition replaces the activation: the skipped agent never
+	// calls its model and its after_agent_complete hook never runs. The
+	// destination starts its own activation. Ordinary model/tool iterations
+	// do not re-fire it. The task context is delivered in
+	// [Input.InvocationID], [Input.StepID], [Input.TaskInput],
+	// [Input.PreviousOutput] and [Input.Conversation].
+	//
+	// Control event: output is always validated strictly and failures
+	// block the run. Blocking output terminates it and beats any
+	// transition; "continue": true is not a request for another turn.
+	EventBeforeAgentRun EventType = "before_agent_run"
+	// EventAfterAgentComplete fires once after an agent finishes
+	// successfully (natural completion, accepted structured output, or a
+	// replayed cached answer) and before the runtime decides whether the
+	// invocation is over. The completion is delivered in [Input.Output]. A
+	// route transition continues the same conversation with another agent.
+	// It does not fire on errors, cancellation, budget stops,
+	// max-iteration pauses, or empty completions.
+	//
+	// Control event with the same output rules as [EventBeforeAgentRun].
+	EventAfterAgentComplete EventType = "after_agent_complete"
 	// EventWorktreeCreate fires once, just after the CLI creates a git
 	// worktree for a `--worktree` run and before the session starts. The
 	// new working directory is reported in [Input.Cwd] (hooks run there)
@@ -314,6 +337,23 @@ type Input struct {
 	// budget without per-session state.
 	Iteration int `json:"iteration,omitempty"`
 
+	// InvocationID identifies one routed user request; StepID identifies
+	// one agent activation inside it. Populated for [EventBeforeAgentRun]
+	// and [EventAfterAgentComplete]; both are owned by the runtime.
+	InvocationID string `json:"invocation_id,omitempty"`
+	StepID       string `json:"step_id,omitempty"`
+	// TaskInput is the original user request of the invocation, preserved
+	// across every step. PreviousOutput is the last successfully completed
+	// step's answer, and Output is the current completion (completion
+	// events only). All three are untrusted task data, never policy.
+	TaskInput      string `json:"input,omitempty"`
+	PreviousOutput string `json:"previous_output,omitempty"`
+	Output         string `json:"output,omitempty"`
+	// Conversation is the visible prior user and final assistant messages,
+	// oldest first, excluding system messages, tool transcripts and the
+	// current request. It lets follow-up requests be assessed in context.
+	Conversation []ConversationMessage `json:"conversation,omitempty"`
+
 	// LastUserMessage is the text content of the latest user message in
 	// the session at dispatch time. Populated for events that respond to
 	// a user turn (stop, after_llm_call). Empty for events that aren't
@@ -379,7 +419,7 @@ type Input struct {
 	// OnAgentSwitch specific: the agent the runtime is moving away
 	// from (FromAgent) and the one it's switching to (ToAgent), plus
 	// the cause of the transition ("transfer_task", "handoff",
-	// "force_handoff", "transfer_task_return"). Empty FromAgent is
+	// "force_handoff", "route", "transfer_task_return"). Empty FromAgent is
 	// valid for the initial switch into the team's default agent.
 	FromAgent       string `json:"from_agent,omitempty"`
 	ToAgent         string `json:"to_agent,omitempty"`
@@ -471,6 +511,22 @@ type Input struct {
 	WorktreePath      string `json:"worktree_path,omitempty"`
 	WorktreeBranch    string `json:"worktree_branch,omitempty"`
 	WorktreeSourceDir string `json:"worktree_source_dir,omitempty"`
+}
+
+// ConversationMessage is one visible turn of prior conversation.
+type ConversationMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// TransitionActionRoute selects another agent to run next.
+const TransitionActionRoute = "route"
+
+// Transition is a control hook's request to change the active agent. The
+// runtime validates it against the agent's routing allowlist before applying it.
+type Transition struct {
+	Action string `json:"action"`
+	Agent  string `json:"agent,omitempty"`
 }
 
 // ModelEndpoint identifies one of an agent's configured models plus
@@ -625,6 +681,11 @@ type HookSpecificOutput struct {
 	// The last non-nil rewrite, including an empty string, is returned.
 	UpdatedToolResponse *string `json:"updated_tool_response,omitempty"`
 
+	// Transition is a control hook's route request. Only
+	// [EventBeforeAgentRun] and [EventAfterAgentComplete] accept it; any
+	// other event rejects output that carries one.
+	Transition *Transition `json:"transition,omitempty"`
+
 	// Metadata is a set of key/value annotations a
 	// [EventPermissionRequest] or [EventToolGuard] hook contributes to
 	// the tool-call confirmation prompt. The runtime merges it onto the
@@ -679,10 +740,15 @@ type Result struct {
 	UpdatedToolResponse *string
 
 	// Metadata aggregates the key/value annotations contributed by
-	// [EventPermissionRequest] and [EventToolGuard] hooks. The runtime
+	// [EventPermissionRequest], [EventToolGuard] and control-event hooks. The runtime
 	// merges it onto the tool's own metadata when emitting the tool-call
 	// confirmation event. nil when no hook supplied any.
 	Metadata map[string]string
+
+	// Transition is the route a control hook requested. It is nil when the
+	// event is not a control event, when no hook asked for a route, and
+	// whenever the event is blocked (blocking beats routing).
+	Transition *Transition
 
 	// Decision is the most-restrictive PreToolUse or ToolGuard verdict
 	// reported by any matching hook in the chain ("" when no hook

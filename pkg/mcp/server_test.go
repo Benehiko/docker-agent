@@ -522,3 +522,12 @@ func TestNewToolCallSession(t *testing.T) {
 	assert.Equal(t, "hello", sess.GetLastUserMessageContent())
 	assert.Equal(t, "/srv/workspace", sess.WorkingDir)
 }
+
+// A session pinned to an agent never routes, so tool calls must stay unpinned.
+func TestNewToolCallSessionIsNotPinned(t *testing.T) {
+	t.Parallel()
+
+	sess := newToolCallSession(agent.New("root", "test agent"), "hello", session.SafetyPolicyAutonomous, "/srv/workspace")
+
+	assert.Empty(t, sess.AgentName, "a pinned session would silently disable hook routing")
+}

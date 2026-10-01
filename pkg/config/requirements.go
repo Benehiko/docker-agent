@@ -27,6 +27,10 @@ const (
 	FeatureExternalAgents Feature = "external_agents"
 	// FeatureHarness covers agents delegating to a coding harness CLI.
 	FeatureHarness Feature = "harness"
+	// FeatureAgentRouting covers agents whose before_agent_run or
+	// after_agent_complete hooks select the next agent. It needs the native
+	// runtime loop, so embedders must enable it explicitly.
+	FeatureAgentRouting Feature = "agent_routing"
 	// FeatureHooks covers agent lifecycle hooks, which run host commands.
 	FeatureHooks Feature = "hooks"
 	// FeatureEvaluators permits outbound provider-backed assessments.
@@ -101,6 +105,9 @@ func Requires(cfg *latest.Config) Requirements {
 		}
 		if !a.Hooks.IsEmpty() {
 			r.feature(FeatureHooks, loc+".hooks")
+		}
+		if a.Routing != nil || a.Hooks.HasControlHooks() {
+			r.feature(FeatureAgentRouting, loc+".routing")
 		}
 		if a.Skills.Enabled() {
 			r.feature(FeatureSkills, loc+".skills")

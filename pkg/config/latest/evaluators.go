@@ -174,6 +174,9 @@ func (t *Config) ValidateEvaluators() error {
 					if !ok {
 						return fmt.Errorf("agents.%s.hooks.%s: unknown evaluator %q", a.Name, event, hook.Evaluator)
 					}
+					if hook.RoutingPolicy != nil {
+						continue // validated with the agent's routing declaration
+					}
 					if err := hook.EvaluatorPolicy.validateEvaluator(def); err != nil {
 						return fmt.Errorf("agents.%s.hooks.%s: %w", a.Name, event, err)
 					}
@@ -181,5 +184,5 @@ func (t *Config) ValidateEvaluators() error {
 			}
 		}
 	}
-	return nil
+	return t.validateRouting()
 }

@@ -40,6 +40,7 @@ type Agent struct {
 	subAgents               []*Agent
 	handoffs                []*Agent
 	forceHandoff            *Agent
+	routing                 Routing
 	parents                 []*Agent
 	addDate                 bool
 	addEnvironmentInfo      bool
@@ -186,6 +187,11 @@ func (a *Agent) Handoffs() []*Agent {
 // no forced handoff is configured.
 func (a *Agent) ForceHandoff() *Agent {
 	return a.forceHandoff
+}
+
+// Routing returns the agents this agent's control hooks may route to.
+func (a *Agent) Routing() Routing {
+	return a.routing
 }
 
 // Parents returns the list of parent agent names
@@ -708,4 +714,16 @@ func (a *Agent) StopToolSets(ctx context.Context) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// Routing declares the routing targets of an agent's before_agent_run and
+// after_agent_complete hooks.
+type Routing struct {
+	AllowedAgents []string
+	DefaultAgent  string
+}
+
+// Allows reports whether name is a permitted route target.
+func (r Routing) Allows(name string) bool {
+	return slices.Contains(r.AllowedAgents, name)
 }

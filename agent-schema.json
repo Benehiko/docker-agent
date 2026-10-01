@@ -676,6 +676,9 @@
           "type": "string",
           "description": "Name of an agent that unconditionally receives the conversation whenever this agent produces a final response, bypassing the LLM's tool-calling entirely. Guarantees deterministic routing for strict pipelines (e.g. extractor -> summarizer). Can be the name of an agent defined in this config or an external reference. Pin an external OCI reference to an immutable digest (e.g. 'namespace/repo@sha256:...') to avoid a per-run registry lookup. Must not reference the agent itself, and force_handoff chains must not form a cycle."
         },
+        "routing": {
+          "$ref": "#/definitions/AgentRouting"
+        },
         "add_date": {
           "type": "boolean",
           "description": "Whether to add date information"
@@ -1410,6 +1413,22 @@
             "$ref": "#/definitions/HookMatcherConfig"
           }
         },
+        "before_agent_run": {
+          "type": "array",
+          "description": "Hooks that run once per agent activation, before the agent's model is selected or its response cache is consulted. A hook may return hookSpecificOutput.transition {action: route, agent} to replace the activation with another agent from the agent's routing.allowed_agents; the skipped agent never calls its model. Each destination has its own activation. At most one hook is allowed per agent after merging identical definitions; requires the agent's routing declaration. Output is always validated strictly and failures block the run; blocking beats any transition.",
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/definitions/RoutingHookDefinition"
+          }
+        },
+        "after_agent_complete": {
+          "type": "array",
+          "description": "Hooks that run once after an agent completes successfully (natural completion, accepted structured output, or a cached answer), before the run decides whether it is finished. A hook may return hookSpecificOutput.transition {action: route, agent} to continue the same conversation with another agent from routing.allowed_agents. Not fired on errors, cancellation, budget stops, iteration-limit pauses, or empty completions. At most one hook is allowed per agent; cannot be combined with force_handoff. Output is always validated strictly and failures block the run.",
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/definitions/RoutingHookDefinition"
+          }
+        },
         "worktree_create": {
           "type": "array",
           "description": "Hooks that run once, just after `docker agent run --worktree` creates a git worktree and before the session starts. They execute inside the new worktree (their working directory is the fresh checkout), and the worktree path, branch, and source repository root are passed in worktree_path / worktree_branch / worktree_source_dir. Use them to prepare the checkout: copy untracked files like .env, install dependencies, warm caches, before the agent begins. A hook may abort the run by blocking (decision=block / continue=false / exit code 2); stdout is surfaced as additional context. Dispatched from the CLI rather than the run loop because the worktree (and the working directory every downstream component captures) must be settled before the runtime and session exist.",
@@ -1531,10 +1550,13 @@
         "evaluator": {
           "type": "string",
           "minLength": 1,
-          "description": "Top-level evaluator referenced by type=evaluator tool_guard hooks."
+          "description": "Top-level evaluator referenced by type=evaluator hooks: tool_guard hooks use evaluator_policy, before_agent_run and after_agent_complete hooks use routing_policy."
         },
         "evaluator_policy": {
           "$ref": "#/definitions/EvaluatorPolicy"
+        },
+        "routing_policy": {
+          "$ref": "#/definitions/RoutingPolicy"
         }
       },
       "required": [
@@ -1607,8 +1629,19 @@
           },
           "then": {
             "required": [
-              "evaluator",
-              "evaluator_policy"
+              "evaluator"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "evaluator_policy"
+                ]
+              },
+              {
+                "required": [
+                  "routing_policy"
+                ]
+              }
             ]
           },
           "else": {
@@ -1622,6 +1655,11 @@
                 {
                   "required": [
                     "evaluator_policy"
+                  ]
+                },
+                {
+                  "required": [
+                    "routing_policy"
                   ]
                 }
               ]
@@ -3499,6 +3537,82 @@
         "fallback"
       ],
       "additionalProperties": false
+    },
+    "AgentRouting": {
+      "type": "object",
+      "description": "Local agents that this agent's before_agent_run and after_agent_complete hooks may route to. Requires at least one of those hooks; the agent cannot route to itself or to harness agents, and the combined graph of possible routes and force_handoff edges must not contain a cycle.",
+      "properties": {
+        "allowed_agents": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Names of agents defined in this config that a hook may select. A transition to any other agent fails the run."
+        },
+        "default_agent": {
+          "type": "string",
+          "description": "Agent used when a choice-evaluator assessment is uncertain (low probability, tie, invalid distribution) or the evaluator fails. Required when an evaluator selects the route; must be in allowed_agents. Cancellation and budget exhaustion never use it."
+        }
+      },
+      "required": [
+        "allowed_agents"
+      ],
+      "additionalProperties": false
+    },
+    "RoutingPolicy": {
+      "type": "object",
+      "description": "Maps a choice evaluator's outcomes to agents. Kept apart from the evaluator so the same assessment can drive different actions.",
+      "properties": {
+        "routes": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Every evaluator choice mapped to an agent in routing.allowed_agents. Missing or unknown choices are configuration errors.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "min_probability": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "Minimum selected-choice probability required to use its route. Enforced by the runtime, not the evaluator prompt; calibrate on representative requests."
+        }
+      },
+      "required": [
+        "routes",
+        "min_probability"
+      ],
+      "additionalProperties": false
+    },
+    "RoutingHookDefinition": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookDefinition"
+        },
+        {
+          "not": {
+            "properties": {
+              "type": {
+                "const": "model"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "evaluator_policy"
+            ]
+          }
+        }
+      ]
     },
     "NonEvaluatorHookDefinition": {
       "allOf": [

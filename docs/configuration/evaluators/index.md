@@ -69,6 +69,14 @@ configured secret sources. The models gateway does not supply evaluator credenti
 
 In HCL, use `evaluator "name" { ... }` for a top-level named evaluator.
 
+## Routing agents
+
+A `choice` evaluator can also select the next agent through a `routing_policy` on
+a `before_agent_run` or `after_agent_complete` hook. Your `instructions` and `choices`
+stay authoritative: routes are never added to the assessment. See
+[agent routing hooks](../hooks/index.md#agent-routing-hooks) for the selector
+contract, fallback rules, and [`examples/hook_routing.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing.yaml).
+
 ## Compatible endpoints: Laya on Baseten
 
 [Laya](https://huggingface.co/convaiinnovations/laya) can use the `typesafe`

@@ -30,12 +30,13 @@ import (
 // It works with any client that implements the RemoteClient interface,
 // including both HTTP (Client) and Connect-RPC (ConnectRPCClient) clients.
 type RemoteRuntime struct {
-	client                  RemoteClient
-	currentAgent            string
-	agentFilename           string
-	sessionID               string
-	team                    *team.Team
-	pendingOAuthElicitation *ElicitationRequestEvent
+	client                   RemoteClient
+	currentAgent             string
+	agentFilename            string
+	sessionID                string
+	team                     *team.Team
+	pendingOAuthElicitations map[string]*ElicitationRequestEvent
+	oauthMu                  sync.Mutex
 
 	// pendingModelOverride is the model ref to apply to the current agent
 	// on the next [RemoteRuntime.RunStream] call. It is set by
@@ -51,7 +52,7 @@ type RemoteRuntime struct {
 	resolvedDefault   string
 	resolvedDefaultMu sync.Mutex
 
-	stateMu sync.Mutex // sessionID and pendingOAuthElicitation
+	stateMu sync.Mutex // sessionID and pendingOAuthElicitations
 
 	reconcileMu       sync.RWMutex // snapshots must not race foreground delivery
 	backgroundInit    sync.Mutex
@@ -81,7 +82,30 @@ type remoteMessageHistory struct {
 	sessions     map[string]string
 	complete     map[string]bool
 	elicitations map[string]bool
+	streamDepth  map[string]int
 	unidentified bool
+	retentionErr error
+	bytes        int
+}
+
+const (
+	remoteHistoryMaxMessages     = 4096
+	remoteHistoryMaxBytes        = 8 << 20
+	remoteHistoryMaxElicitations = 4096
+)
+
+// Eviction cannot turn old answers into new answers: disable recovery on overflow.
+func (h *remoteMessageHistory) limit() {
+	if h.retentionErr == nil && len(h.content)+len(h.complete) <= remoteHistoryMaxMessages && h.bytes <= remoteHistoryMaxBytes && len(h.elicitations) <= remoteHistoryMaxElicitations && len(h.streamDepth) <= remoteHistoryMaxMessages {
+		return
+	}
+	if h.retentionErr == nil {
+		h.retentionErr = errors.New("remote recovery history exceeded its retention limit")
+	}
+	clear(h.content)
+	clear(h.sessions)
+	clear(h.streamDepth)
+	h.bytes = 0
 }
 
 func newRemoteMessageHistory(messages []session.Message) *remoteMessageHistory {
@@ -90,24 +114,27 @@ func newRemoteMessageHistory(messages []session.Message) *remoteMessageHistory {
 		sessions:     make(map[string]string),
 		complete:     make(map[string]bool),
 		elicitations: make(map[string]bool),
+		streamDepth:  make(map[string]int),
 	}
 	for _, msg := range messages {
-		if msg.Message.Role != chat.MessageRoleAssistant {
+		if !recoverableAssistantText(msg) {
 			continue
 		}
-		if msg.Message.MessageID == "" && recoverableAssistantText(msg) {
+		if msg.Message.MessageID == "" {
 			h.unidentified = true
+		} else {
+			h.complete[msg.Message.MessageID] = true
 		}
-		content := new(strings.Builder)
-		content.WriteString(msg.Message.Content)
-		h.content[msg.Message.MessageID] = content
-		h.complete[msg.Message.MessageID] = true
+		h.limit()
+		if h.retentionErr != nil {
+			break
+		}
 	}
 	return h
 }
 
 func recoverableAssistantText(msg session.Message) bool {
-	return !msg.Implicit && msg.Message.Role == chat.MessageRoleAssistant && msg.Message.Content != "" &&
+	return !msg.Implicit && msg.Message.Role == chat.MessageRoleAssistant && chat.VisibleAssistantContent(msg.Message.Content) != "" &&
 		len(msg.Message.ToolCalls) == 0 && msg.Message.FunctionCall == nil
 }
 
@@ -117,6 +144,10 @@ func (h *remoteMessageHistory) deliver(event Event, send func(Event) bool) bool 
 	request, isElicitation := event.(*ElicitationRequestEvent)
 	if isElicitation && request.ElicitationID != "" && h.elicitations[request.ElicitationID] {
 		return true
+	}
+	if isElicitation && request.ElicitationID != "" && len(h.elicitations) >= remoteHistoryMaxElicitations {
+		send(Error("remote elicitation history exceeded its retention limit; interaction was not delivered"))
+		return false
 	}
 	choice, ok := event.(*AgentChoiceEvent)
 	if ok && choice.MessageID != "" && h.complete[choice.MessageID] {
@@ -128,7 +159,32 @@ func (h *remoteMessageHistory) deliver(event Event, send func(Event) bool) bool 
 	if isElicitation && request.ElicitationID != "" {
 		h.elicitations[request.ElicitationID] = true
 	}
-	if ok {
+	if started, ok := event.(*StreamStartedEvent); ok && h.retentionErr == nil {
+		if depth := h.streamDepth[started.SessionID]; depth < remoteHistoryMaxMessages {
+			h.streamDepth[started.SessionID]++
+		} else {
+			h.retentionErr = errors.New("remote recovery history exceeded its retention limit")
+		}
+	}
+	if stopped, ok := event.(*StreamStoppedEvent); ok {
+		if depth := h.streamDepth[stopped.SessionID]; depth > 1 {
+			h.streamDepth[stopped.SessionID]--
+			return true
+		}
+		delete(h.streamDepth, stopped.SessionID)
+		for id, content := range h.content {
+			if scope := h.sessions[id]; scope != "" && scope != stopped.SessionID {
+				continue
+			}
+			if chat.VisibleAssistantContent(content.String()) != "" {
+				h.complete[id] = true
+			}
+			h.bytes -= content.Len()
+			delete(h.content, id)
+			delete(h.sessions, id)
+		}
+	}
+	if ok && h.retentionErr == nil {
 		if choice.MessageID == "" {
 			h.unidentified = true
 		} else {
@@ -138,20 +194,26 @@ func (h *remoteMessageHistory) deliver(event Event, send func(Event) bool) bool 
 				h.content[choice.MessageID] = content
 			}
 			content.WriteString(choice.Content)
+			h.bytes += len(choice.Content)
 			h.sessions[choice.MessageID] = choice.SessionID
 		}
 	}
+	h.limit()
 	return true
 }
 
 func (h *remoteMessageHistory) reconcile(snapshot *api.SessionSnapshotResponse, send func(Event)) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.retentionErr != nil {
+		return h.retentionErr
+	}
 	if h.unidentified {
 		return errors.New("cannot safely reconcile assistant messages without message IDs")
 	}
 	// Validate the whole snapshot before emitting any append-only deltas.
 	seen := make(map[string]bool)
+	retained := len(h.content) + len(h.complete)
 	for _, msg := range snapshot.Messages {
 		if !recoverableAssistantText(msg) {
 			continue
@@ -159,10 +221,16 @@ func (h *remoteMessageHistory) reconcile(snapshot *api.SessionSnapshotResponse, 
 		id := msg.Message.MessageID
 		var delivered string
 		if content := h.content[id]; content != nil {
-			delivered = content.String()
+			delivered = chat.VisibleAssistantContent(content.String())
 		}
-		if id == "" || seen[id] || !strings.HasPrefix(msg.Message.Content, delivered) {
+		if id == "" || seen[id] || (!h.complete[id] && !strings.HasPrefix(chat.VisibleAssistantContent(msg.Message.Content), delivered)) {
 			return errors.New("cannot safely reconcile changed or ambiguous assistant messages")
+		}
+		if !h.complete[id] && h.content[id] == nil {
+			retained++
+		}
+		if retained > remoteHistoryMaxMessages || len(seen) >= remoteHistoryMaxMessages {
+			return errors.New("remote recovery history exceeded its retention limit")
 		}
 		seen[id] = true
 	}
@@ -171,18 +239,24 @@ func (h *remoteMessageHistory) reconcile(snapshot *api.SessionSnapshotResponse, 
 			continue
 		}
 		id := msg.Message.MessageID
-		content := h.content[id]
-		if content == nil {
-			content = new(strings.Builder)
-			h.content[id] = content
+		if h.complete[id] {
+			continue
 		}
-		if suffix := strings.TrimPrefix(msg.Message.Content, content.String()); suffix != "" {
+		var delivered string
+		if content := h.content[id]; content != nil {
+			delivered = chat.VisibleAssistantContent(content.String())
+			h.bytes -= content.Len()
+		}
+		if suffix := strings.TrimPrefix(chat.VisibleAssistantContent(msg.Message.Content), delivered); suffix != "" {
 			sessionID := cmp.Or(h.sessions[id], snapshot.ID)
 			send(AgentChoice(msg.AgentName, sessionID, suffix, id))
-			content.WriteString(suffix)
 		}
+		delete(h.content, id)
+		delete(h.sessions, id)
 		h.complete[id] = true
 	}
+	clear(h.streamDepth)
+	h.limit()
 	return nil
 }
 
@@ -408,6 +482,9 @@ func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-
 
 		messages := r.convertSessionMessages(sess)
 		r.stateMu.Lock()
+		if r.sessionID != sess.ID {
+			clear(r.pendingOAuthElicitations)
+		}
 		r.sessionID = sess.ID
 		r.stateMu.Unlock()
 		r.startBackgroundEvents(ctx, sess.ID)
@@ -452,18 +529,16 @@ func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-
 			}
 		}()
 		var sawRootStop, sawError bool
-		send := func(event Event) bool { return sendClientEvent(ctx, events, event) }
+		send := func(event Event) bool {
+			r.trackOAuthElicitation(event)
+			return sendClientEvent(ctx, events, event)
+		}
 		for streamEvent := range streamChan {
 			switch event := streamEvent.(type) {
 			case *StreamStoppedEvent:
 				sawRootStop = sawRootStop || event.SessionID == "" || event.SessionID == sess.ID
 			case *ErrorEvent:
 				sawError = true
-			}
-			if elicitationRequest, ok := streamEvent.(*ElicitationRequestEvent); ok {
-				r.stateMu.Lock()
-				r.pendingOAuthElicitation = elicitationRequest
-				r.stateMu.Unlock()
 			}
 			r.backgroundMu.Lock()
 			subscription := r.background
@@ -580,29 +655,51 @@ func (r *RemoteRuntime) convertSessionMessages(sess *session.Session) []api.Mess
 	return messages
 }
 
-// ResumeElicitation sends an elicitation response back to a waiting elicitation request
-func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
-	sessionID := r.activeSessionID()
-	id := firstElicitationID(elicitationID)
-	slog.DebugContext(ctx, "Resuming remote runtime with elicitation response", "agent", r.currentAgent, "action", action, "session_id", sessionID, "elicitation_id", id)
-
+func (r *RemoteRuntime) trackOAuthElicitation(event Event) {
+	request, ok := event.(*ElicitationRequestEvent)
+	if !ok || request.Meta["docker-agent/type"] != "oauth_flow" || request.ElicitationID == "" {
+		return
+	}
 	r.stateMu.Lock()
-	pending := r.pendingOAuthElicitation
-	r.stateMu.Unlock()
-	err := r.handleOAuthElicitation(ctx, pending)
-	if err != nil {
-		return err
+	defer r.stateMu.Unlock()
+	if r.pendingOAuthElicitations == nil {
+		r.pendingOAuthElicitations = make(map[string]*ElicitationRequestEvent)
 	}
-
-	if err := r.client.ResumeElicitation(ctx, sessionID, action, content, id); err != nil {
-		return err
+	if r.pendingOAuthElicitations[request.ElicitationID] == nil && len(r.pendingOAuthElicitations) < remoteHistoryMaxElicitations {
+		r.pendingOAuthElicitations[request.ElicitationID] = request
 	}
-
-	return nil
 }
 
-func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *ElicitationRequestEvent) error {
-	sessionID := r.activeSessionID()
+// ResumeElicitation answers a request, running OAuth only for its explicit ID.
+func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	// Serialize responses, including the browser flow, so concurrent accepts
+	// cannot authorize the same request twice.
+	r.oauthMu.Lock()
+	defer r.oauthMu.Unlock()
+	id := firstElicitationID(elicitationID)
+	r.stateMu.Lock()
+	sessionID := r.sessionID
+	pending := r.pendingOAuthElicitations[id]
+	ambiguous := id == "" && len(r.pendingOAuthElicitations) > 0
+	r.stateMu.Unlock()
+	if ambiguous {
+		return errors.New("OAuth elicitation requires an explicit elicitation ID")
+	}
+	if pending != nil {
+		defer func() {
+			r.stateMu.Lock()
+			defer r.stateMu.Unlock()
+			delete(r.pendingOAuthElicitations, id)
+		}()
+		if action == tools.ElicitationActionAccept {
+			// handleOAuthElicitation sends the token response itself.
+			return r.handleOAuthElicitation(ctx, sessionID, pending)
+		}
+	}
+	return r.client.ResumeElicitation(ctx, sessionID, action, content, id)
+}
+
+func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, sessionID string, req *ElicitationRequestEvent) error {
 	if req == nil {
 		return nil
 	}
@@ -931,21 +1028,42 @@ func (r *RemoteRuntime) activeSessionID() string {
 	return r.sessionID
 }
 
-func (r *RemoteRuntime) emitBackgroundEvent(subscription *remoteEventSubscription, event Event) {
+func (r *RemoteRuntime) deliverBackgroundEvent(subscription *remoteEventSubscription, event Event) bool {
 	r.backgroundMu.Lock()
 	handler := r.backgroundHandler
 	active := r.background == subscription && !r.closed
 	r.backgroundMu.Unlock()
-	if active && handler != nil {
-		if request, ok := event.(*ElicitationRequestEvent); ok {
-			r.stateMu.Lock()
-			r.pendingOAuthElicitation = request
-			r.stateMu.Unlock()
+	if !active || handler == nil {
+		return false
+	}
+	if recovered, ok := event.(*SessionRecoveredEvent); ok {
+		r.stateMu.Lock()
+		// Root idleness does not complete detached sub-session requests.
+		for id, request := range r.pendingOAuthElicitations {
+			if request.SessionID == "" || request.SessionID == recovered.SessionID {
+				delete(r.pendingOAuthElicitations, id)
+			}
 		}
-		subscription.history.deliver(event, func(event Event) bool {
-			handler(event)
-			return true
-		})
+		r.stateMu.Unlock()
+	} else {
+		r.trackOAuthElicitation(event)
+	}
+	handler(event)
+	return true
+}
+
+func (r *RemoteRuntime) emitBackgroundEvent(subscription *remoteEventSubscription, event Event) bool {
+	return subscription.history.deliver(event, func(event Event) bool {
+		return r.deliverBackgroundEvent(subscription, event)
+	})
+}
+
+func (r *RemoteRuntime) clearBackgroundSubscription(subscription *remoteEventSubscription) {
+	subscription.cancel()
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	if r.background == subscription {
+		r.background = nil
 	}
 }
 
@@ -987,12 +1105,7 @@ func (r *RemoteRuntime) startBackgroundEvents(ctx context.Context, sessionID str
 	}
 	if err != nil {
 		r.emitBackgroundEvent(subscription, Warning(fmt.Sprintf("remote background events unavailable: %v", err), ""))
-		cancel()
-		r.backgroundMu.Lock()
-		if r.background == subscription {
-			r.background = nil
-		}
-		r.backgroundMu.Unlock()
+		r.clearBackgroundSubscription(subscription)
 		return
 	}
 	r.backgroundMu.Lock()
@@ -1005,7 +1118,7 @@ func (r *RemoteRuntime) startBackgroundEvents(ctx context.Context, sessionID str
 	r.backgroundMu.Unlock()
 
 	go func() {
-		defer cancel()
+		defer r.clearBackgroundSubscription(subscription)
 		events, err := r.openBackgroundEvents(backgroundCtx, client, sessionID, snapshot.LastEventSeq)
 		if err != nil {
 			r.emitBackgroundEvent(subscription, Error(fmt.Sprintf("subscribing to remote background events: %v", err)))
@@ -1037,7 +1150,9 @@ func (r *RemoteRuntime) startBackgroundEvents(ctx context.Context, sessionID str
 					}
 					continue
 				}
-				r.emitBackgroundEvent(subscription, event)
+				if !r.emitBackgroundEvent(subscription, event) {
+					return
+				}
 			}
 		}
 	}()
@@ -1099,8 +1214,13 @@ func (r *RemoteRuntime) reconcileIdleSnapshot(ctx context.Context, subscription 
 	if !active || handler == nil || ctx.Err() != nil {
 		return nil, context.Canceled
 	}
-	if err := subscription.history.reconcile(snapshot, handler); err != nil {
+	if err := subscription.history.reconcile(snapshot, func(event Event) {
+		r.deliverBackgroundEvent(subscription, event)
+	}); err != nil {
 		return nil, err
+	}
+	if !r.deliverBackgroundEvent(subscription, SessionRecovered(snapshot.ID)) {
+		return nil, context.Canceled
 	}
 	return snapshot, nil
 }

@@ -15,7 +15,7 @@ func speakCommand() *commands.Item {
 		ID:           "session.speak",
 		Label:        "Speak",
 		SlashCommand: "/speak",
-		Description:  "Start speech-to-text transcription (press Enter or Escape to stop)",
+		Description:  "Transcribe audio directly with OpenAI (requires OPENAI_API_KEY; Enter or Escape to stop)",
 		Category:     "Session",
 		Immediate:    true,
 		Execute: func(string) tea.Cmd {

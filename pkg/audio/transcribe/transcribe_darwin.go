@@ -56,7 +56,7 @@ func New(apiKey string) *Transcriber {
 // connection fails. Call Stop to end transcription.
 func (t *Transcriber) Start(ctx context.Context, handler TranscriptHandler) error {
 	if t.apiKey == "" {
-		return errors.New("speech-to-text requires the OPENAI_API_KEY environment variable to be set")
+		return errors.New("/speak sends audio directly to OpenAI; set a separate OPENAI_API_KEY environment variable even when chat uses Docker's models gateway, which does not support /speak")
 	}
 
 	if wasRunning := t.running.Swap(true); wasRunning {
@@ -73,7 +73,7 @@ func (t *Transcriber) Start(ctx context.Context, handler TranscriptHandler) erro
 	})
 	if err != nil {
 		t.running.Store(false)
-		return fmt.Errorf("connect to OpenAI: %w", err)
+		return fmt.Errorf("connect /speak directly to OpenAI Realtime API (not Docker's models gateway): %w", err)
 	}
 	t.conn = conn
 

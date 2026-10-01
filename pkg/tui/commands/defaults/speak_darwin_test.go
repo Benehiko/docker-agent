@@ -11,6 +11,12 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/messages"
 )
 
+func TestSpeakCommand_Description(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "Transcribe audio directly with OpenAI (requires OPENAI_API_KEY; Enter or Escape to stop)", speakCommand().Description)
+}
+
 func TestParseSlashCommand_Speak(t *testing.T) {
 	t.Parallel()
 	parser := newTestParser()

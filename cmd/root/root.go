@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/codingharness"
 	"github.com/docker/docker-agent/pkg/feedback"
 	"github.com/docker/docker-agent/pkg/logging"
+	pathx "github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/runtime/jscommands"
@@ -53,8 +54,8 @@ func resolveConfigDir(flagValue string) string {
 	return cmp.Or(flagValue, os.Getenv(envConfigDir), os.Getenv(cagentEnvConfigDir))
 }
 
-func resolveDataDir(flagValue string) string {
-	return cmp.Or(flagValue, os.Getenv(envDataDir))
+func resolveDataDir(flagValue string) (string, error) {
+	return pathx.ExpandHomeDir(cmp.Or(flagValue, os.Getenv(envDataDir)))
 }
 
 func NewRootCmd() *cobra.Command {
@@ -77,8 +78,12 @@ New to docker agent? Take the hands-on tour: docker agent getting-started`,
 			if dir := resolveConfigDir(flags.configDir); dir != "" {
 				paths.SetConfigDir(dir)
 			}
-			if dir := resolveDataDir(flags.dataDir); dir != "" {
-				paths.SetDataDir(dir)
+			dataDir, err := resolveDataDir(flags.dataDir)
+			if err != nil {
+				return fmt.Errorf("resolving data directory: %w", err)
+			}
+			if dataDir != "" {
+				paths.SetDataDir(dataDir)
 			}
 
 			// Set the version for automatic telemetry initialization

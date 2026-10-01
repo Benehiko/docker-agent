@@ -841,6 +841,9 @@ These flags are available on every `docker agent` command:
 | `--data-dir <path>`       | Override the data directory (default: `~/.cagent`; holds `session.db`, prompt `history`, worktrees, plans, …). Also reads `DOCKER_AGENT_DATA_DIR`; the flag takes precedence.            |
 | `--help`                  | Show help for any command                                                              |
 
+Data-directory overrides expand a leading `~` to your home directory. Other
+characters, including `$`, are treated literally.
+
 ### OpenTelemetry environment variables
 
 When `--otel` is enabled, the standard [OTel SDK env vars](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/) are honored (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_RESOURCE_ATTRIBUTES`, etc.). Two additional Docker Agent-specific variables control GenAI instrumentation:

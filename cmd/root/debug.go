@@ -91,7 +91,8 @@ func newDebugCmd() *cobra.Command {
 			"Parameters must be a JSON object (defaults to {}). Use --agent to select an agent.\n" +
 			"Use 'debug toolsets --json' to inspect tool names and parameter schemas.\n\n" +
 			"Calls have real side effects and bypass session hooks and approval checks.\n" +
-			"Tools that require an agent runtime are not supported.",
+			"Tools that require an agent runtime are not supported. Built-in background jobs\n" +
+			"cannot be launched because toolsets are stopped when the command exits.",
 		Example: `  docker agent debug tool agent.yaml read_file '{"path":"README.md"}'
   docker agent debug tool agent.yaml shell '{"cmd":"pwd"}' --agent root --json`,
 		Args: cobra.RangeArgs(2, 3),

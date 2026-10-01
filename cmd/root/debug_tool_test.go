@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 )
 
 const debugToolConfig = `
@@ -228,6 +231,48 @@ func TestCallDebugTool(t *testing.T) {
 		assert.Same(t, expected, result)
 	})
 
+	t.Run("canceled before execution", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		tool := tools.Tool{Name: "test", Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			t.Fatal("canceled handler must not run")
+			return nil, nil
+		}}
+		result, err := callDebugTool(ctx, tool, "{}")
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, result)
+	})
+
+	t.Run("canceled during execution", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		tool := tools.Tool{Name: "test", Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			cancel()
+			return tools.ResultSuccess("ignored cancellation"), nil
+		}}
+		result, err := callDebugTool(ctx, tool, "{}")
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, result)
+	})
+
+	t.Run("expired deadline", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		defer cancel()
+		tool := tools.Tool{Name: "test", Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			t.Fatal("expired handler must not run")
+			return nil, nil
+		}}
+		result, err := callDebugTool(ctx, tool, "{}")
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Nil(t, result)
+	})
+
 	t.Run("handler error", func(t *testing.T) {
 		t.Parallel()
 
@@ -341,4 +386,63 @@ func TestDebugToolsetsCommand_IncludesDeferredTools(t *testing.T) {
 		}
 	}
 	t.Fatal("deferred shell tool must be discoverable")
+}
+
+func TestCallDebugTool_CanceledWriteFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	available, err := filesystem.New(dir).Tools(t.Context())
+	require.NoError(t, err)
+	index := slices.IndexFunc(available, func(tool tools.Tool) bool { return tool.Name == filesystem.ToolNameWriteFile })
+	require.NotEqual(t, -1, index)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = callDebugTool(ctx, available[index], `{"path":"marker","content":"must not be written"}`)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NoFileExists(t, filepath.Join(dir, "marker"))
+}
+
+func TestDebugToolCommand_BackgroundJobs(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"direct", "deferred", "code mode"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			for _, recall := range []bool{false, true} {
+				t.Run(fmt.Sprintf("recall=%t", recall), func(t *testing.T) {
+					t.Parallel()
+
+					flags := &debugFlags{}
+					flags.runConfig.GlobalCodeMode = mode == "code mode"
+					cfg := fmt.Sprintf(`agents:
+  root:
+    model: test
+    toolsets:
+      - type: background_jobs
+        recall: %t
+        defer: %t
+models:
+  test:
+    provider: openai
+    model: gpt-4o
+    max_tokens: 100
+`, recall, mode == "deferred")
+					args := []string{"run_background_job", `{"cmd":"echo must-not-run"}`}
+					if mode == "code mode" {
+						args = []string{"run_tools_with_javascript", `{"script":"try { await run_background_job({cmd: 'echo must-not-run'}); return 'unexpected success'; } catch (error) { return error.message; }"}`}
+					}
+					out, err := runDebugToolConfig(t, flags, cfg, args...)
+					if mode == "code mode" {
+						require.NoError(t, err)
+						assert.Contains(t, out, "background jobs are not supported by this host")
+					} else {
+						require.ErrorContains(t, err, "background jobs are not supported by this host")
+						assert.Empty(t, out)
+					}
+				})
+			}
+		})
+	}
 }

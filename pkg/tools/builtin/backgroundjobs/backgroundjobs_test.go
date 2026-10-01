@@ -573,3 +573,29 @@ func TestBackgroundJobsTool_BackgroundedChildDoesNotBlockReturn(t *testing.T) {
 	assert.Contains(t, listResult.Output, "Status: completed")
 	assert.Contains(t, listResult.Output, "Exit Code: 0")
 }
+
+func TestBackgroundJobsTool_WithoutBackgroundJobs(t *testing.T) {
+	t.Parallel()
+
+	for _, recall := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no recall", true: "recall"}[recall], func(t *testing.T) {
+			t.Parallel()
+
+			toolset := newTestTool(t)
+			toolset.handler.recall = recall
+			available, err := toolset.Tools(t.Context())
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(WithoutBackgroundJobs(t.Context()))
+			defer cancel()
+			result, err := available[0].Handler(ctx, tools.ToolCall{
+				Function: tools.FunctionCall{
+					Name:      ToolNameRunBackgroundJob,
+					Arguments: `{"cmd":"echo must-not-run","recall":true}`,
+				},
+			}, tools.NopRuntime{})
+			require.ErrorContains(t, err, "background jobs are not supported by this host")
+			assert.Nil(t, result)
+			assert.Zero(t, toolset.handler.jobCounter.Load(), "rejection must precede spawning a process")
+		})
+	}
+}

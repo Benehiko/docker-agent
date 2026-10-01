@@ -777,7 +777,7 @@ $ docker agent debug oauth login agent.yaml github
 > [!WARNING]
 > **`debug tool` executes real tool calls**
 >
-> Calls can modify files, run commands, or contact external services. They bypass session hooks and approval checks. Tools that require an agent runtime (such as delegation and handoff) are not supported. Tool errors print their result and exit with a non-zero status. Use `debug toolsets --json` to inspect parameter schemas before calling a tool.
+> Calls can modify files, run commands, or contact external services. They bypass session hooks and approval checks. Tools that require an agent runtime (such as delegation and handoff) are not supported. Built-in background jobs cannot be launched because toolsets are stopped when the command exits; use `shell` for synchronous commands instead. Tool errors print their result and exit with a non-zero status. Use `debug toolsets --json` to inspect parameter schemas before calling a tool.
 
 > [!WARNING]
 > **`debug auth --json` prints the full bearer token**

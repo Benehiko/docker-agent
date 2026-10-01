@@ -11,10 +11,11 @@ import (
 
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
 )
 
 func (f *debugFlags) runDebugToolCommand(cmd *cobra.Command, args []string) (commandErr error) {
-	ctx := cmd.Context()
+	ctx := backgroundjobs.WithoutBackgroundJobs(cmd.Context())
 	// Tool parameters may contain secrets; keep them out of command telemetry.
 	telemetry.TrackCommand(ctx, "debug", []string{"tool"})
 	defer func() {
@@ -91,9 +92,15 @@ func callDebugTool(ctx context.Context, tool tools.Tool, arguments string) (*too
 			Arguments: arguments,
 		},
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	result, err := tool.Handler(ctx, toolCall, tools.NopRuntime{})
 	if err != nil {
 		return nil, fmt.Errorf("calling tool %q: %w", tool.Name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if result == nil {
 		return nil, fmt.Errorf("tool %q returned no result", tool.Name)

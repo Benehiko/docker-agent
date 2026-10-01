@@ -749,7 +749,8 @@ $ docker agent debug <subcommand> [flags]
 | Subcommand | Description |
 | ---------- | ----------- |
 | `config <agent-file> [flavor...]` | Print the fully-resolved, canonical form of an agent's configuration (defaults applied, references resolved). When [flavors](../../configuration/flavors/index.md) are given they are applied in order and the `flavors` section is dropped from the output. |
-| `toolsets <agent-file>` | List every toolset each agent in the config exposes, with each tool's name and description. Add `--json` for machine-readable output including each tool's parameters, annotations, and output schema. |
+| `toolsets <agent-file>` | List every toolset each agent in the config exposes, with each tool's name and description. Add `--json` for machine-readable output including each tool's parameters, annotations, and output schema. Deferred tools are included. |
+| `tool <agent-file> <tool-name> [parameters-json]` | Call a tool directly with a JSON object (defaults to `{}`), without an LLM turn. Select an agent with `-a` / `--agent`; otherwise the team's default agent is used. Add `--json` for the full result, including structured content and media. Deferred tools can be called without activation. |
 | `skills <agent-file>` | List the skills discovered for each agent, marking forked skills. Add `--json` for machine-readable output; each skill includes a `path` field when it is backed by a file (omitted for inline skills). |
 | `title <agent-file> <question>` | Generate a session title for `<question>` using the same title-generation path the TUI uses (including any configured `title_model`), without starting a session. See [Session Titles](../sessions/index.md#session-titles). |
 | `auth` | Print parsed Docker authentication info from the token in use (source, subject, issuer, expiry, username/email). Add `--json` for machine-readable output. |
@@ -763,6 +764,8 @@ $ docker agent debug config agent.yaml
 $ docker agent debug config agent.yaml cheap with-shell
 $ docker agent debug toolsets agent.yaml
 $ docker agent debug toolsets agent.yaml --json
+$ docker agent debug tool agent.yaml read_file '{"path":"README.md"}'
+$ docker agent debug tool agent.yaml shell '{"cmd":"pwd"}' -a root --json
 $ docker agent debug skills agent.yaml
 $ docker agent debug skills agent.yaml --json
 $ docker agent debug title agent.yaml "How do I configure a fallback model?"
@@ -772,13 +775,18 @@ $ docker agent debug oauth login agent.yaml github
 ```
 
 > [!WARNING]
+> **`debug tool` executes real tool calls**
+>
+> Calls can modify files, run commands, or contact external services. They bypass session hooks and approval checks. Tools that require an agent runtime (such as delegation and handoff) are not supported. Tool errors print their result and exit with a non-zero status. Use `debug toolsets --json` to inspect parameter schemas before calling a tool.
+
+> [!WARNING]
 > **`debug auth --json` prints the full bearer token**
 >
 > The text output of `debug auth` truncates the token to a short preview, but `--json` includes the complete, unredacted JWT in its `token` field. Never paste `debug auth --json` output into logs, issue trackers, or bug reports — anyone with that token can act as you against Docker. Use the plain-text output (or redact the `token` field yourself) when sharing diagnostic output.
 
 The `Source` field says where the token came from: `docker desktop`, or `minted from the stored access token` when it was obtained by exchanging the access token `docker login` stored. See [Docker authentication](../../guides/secrets/index.md#docker-authentication).
 
-The `config`, `toolsets`, `skills`, and `title` subcommands also accept [runtime configuration flags](#runtime-configuration-flags) (`--working-dir`, `--models-gateway`, …); `title` additionally accepts `--model` to override the model used to resolve the config before generating the title.
+The `config`, `toolsets`, `tool`, `skills`, and `title` subcommands also accept [runtime configuration flags](#runtime-configuration-flags) (`--working-dir`, `--models-gateway`, …); `title` additionally accepts `--model` to override the model used to resolve the config before generating the title.
 
 ### `docker-agent completion`
 

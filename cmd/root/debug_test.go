@@ -43,9 +43,8 @@ func TestDebug_VisibleInAdvancedGroup(t *testing.T) {
 	assert.Equal(t, "advanced", cmd.GroupID)
 }
 
-// Non-regression: `toolsets --json` and `skills --json` must not share flag
-// storage, otherwise running one with --json on a reused command tree makes
-// the other emit JSON too.
+// Non-regression: debug subcommands must not share JSON flag storage, otherwise
+// reusing a command tree makes unrelated subcommands emit JSON too.
 func TestDebug_JSONFlagsAreIndependent(t *testing.T) {
 	t.Parallel()
 
@@ -53,6 +52,8 @@ func TestDebug_JSONFlagsAreIndependent(t *testing.T) {
 	toolsetsCmd, _, err := cmd.Find([]string{"toolsets"})
 	require.NoError(t, err)
 	skillsCmd, _, err := cmd.Find([]string{"skills"})
+	require.NoError(t, err)
+	toolCmd, _, err := cmd.Find([]string{"tool"})
 	require.NoError(t, err)
 
 	require.NoError(t, toolsetsCmd.Flags().Set("json", "true"))
@@ -64,6 +65,9 @@ func TestDebug_JSONFlagsAreIndependent(t *testing.T) {
 
 	assert.True(t, toolsetsJSON)
 	assert.False(t, skillsJSON)
+	toolJSON, err := toolCmd.Flags().GetBool("json")
+	require.NoError(t, err)
+	assert.False(t, toolJSON)
 }
 
 const flavoredConfig = `

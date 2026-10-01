@@ -25,6 +25,8 @@ import (
 type debugFlags struct {
 	modelOverrides []string
 	toolsetsJSON   bool
+	toolJSON       bool
+	toolAgent      string
 	skillsJSON     bool
 	runConfig      config.RuntimeConfig
 }
@@ -82,6 +84,22 @@ func newDebugCmd() *cobra.Command {
 	}
 	toolsetsCmd.Flags().BoolVar(&flags.toolsetsJSON, "json", false, "Output in JSON format")
 	cmd.AddCommand(toolsetsCmd)
+	toolCmd := &cobra.Command{
+		Use:   "tool <agent-file>|<registry-ref> <tool-name> [parameters-json]",
+		Short: "Call a tool of an agent directly",
+		Long: "Call a tool of an agent directly, without an LLM turn.\n\n" +
+			"Parameters must be a JSON object (defaults to {}). Use --agent to select an agent.\n" +
+			"Use 'debug toolsets --json' to inspect tool names and parameter schemas.\n\n" +
+			"Calls have real side effects and bypass session hooks and approval checks.\n" +
+			"Tools that require an agent runtime are not supported.",
+		Example: `  docker agent debug tool agent.yaml read_file '{"path":"README.md"}'
+  docker agent debug tool agent.yaml shell '{"cmd":"pwd"}' --agent root --json`,
+		Args: cobra.RangeArgs(2, 3),
+		RunE: flags.runDebugToolCommand,
+	}
+	toolCmd.Flags().StringVarP(&flags.toolAgent, "agent", "a", "", "Name of the agent (defaults to the team's default agent)")
+	toolCmd.Flags().BoolVar(&flags.toolJSON, "json", false, "Output the full tool result in JSON format")
+	cmd.AddCommand(toolCmd)
 	skillsCmd := &cobra.Command{
 		Use:   "skills <agent-file>|<registry-ref>",
 		Short: "Debug the skills of an agent",
@@ -174,7 +192,7 @@ func (f *debugFlags) runDebugToolsetsCommand(cmd *cobra.Command, args []string) 
 			continue
 		}
 
-		agentTools, err := agent.Tools(ctx)
+		agentTools, err := agent.ToolsWithCatalog(ctx)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to query tools", "name", agent.Name(), "error", err)
 			continue

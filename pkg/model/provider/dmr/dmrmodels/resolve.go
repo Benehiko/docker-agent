@@ -214,17 +214,19 @@ func resolvePrimaryDMRURL(ctx context.Context, endpoint string) (string, *http.C
 		baseURL := fmt.Sprintf("http://_/%s%s/v1", expPrefix, dmrInferencePrefix)
 
 		connection, _ := ctx.Value(dockerConnectionKey{}).(*dockerConnection)
-		httpClient := &http.Client{
-			Transport: &http.Transport{
-				IdleConnTimeout: 30 * time.Second,
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					if connection != nil {
-						return connection.dial(ctx)
-					}
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", "/var/run/docker.sock")
-				},
+		transport := &http.Transport{
+			IdleConnTimeout: 30 * time.Second,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				if connection != nil {
+					return connection.dial(ctx)
+				}
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", "/var/run/docker.sock")
 			},
+		}
+		httpClient := &http.Client{Transport: transport}
+		if connection != nil {
+			httpClient.Transport = &dockerTransport{Transport: transport, args: connection.args}
 		}
 
 		return baseURL, httpClient

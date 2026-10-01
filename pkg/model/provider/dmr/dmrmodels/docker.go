@@ -3,8 +3,10 @@ package dmrmodels
 import (
 	"context"
 	"net"
+	"net/http"
 	"os/exec"
 	"slices"
+	"strings"
 )
 
 type dockerConnectionKey struct{}
@@ -32,4 +34,18 @@ func DockerCommand(ctx context.Context, args ...string) *exec.Cmd {
 		args = slices.Concat(conn.args, args)
 	}
 	return exec.CommandContext(ctx, "docker", args...)
+}
+
+type dockerTransport struct {
+	*http.Transport
+
+	args []string
+}
+
+func (t *dockerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.Transport.RoundTrip(req)
+	if err != nil {
+		return nil, &net.OpError{Op: "docker connection", Net: strings.Join(t.args, " "), Err: err}
+	}
+	return resp, nil
 }

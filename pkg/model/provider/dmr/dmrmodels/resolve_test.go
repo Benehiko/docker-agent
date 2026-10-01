@@ -3,9 +3,13 @@ package dmrmodels
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -100,6 +104,59 @@ func TestResolvedDockerTransportRetainsConnection(t *testing.T) {
 	models, err := ListModelsAt(t.Context(), client, baseURL)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ai/test"}, models)
+}
+
+func TestSelectedDockerTransportErrorsNameEngine(t *testing.T) {
+	if inContainer() {
+		t.Skip("Desktop engine routing is host-only")
+	}
+	t.Setenv("MODEL_RUNNER_HOST", "")
+	for _, tt := range []struct {
+		name string
+		err  error
+		dial bool
+	}{
+		{name: "dial", err: net.ErrClosed, dial: true},
+		{name: "closed pipe", err: os.ErrClosed},
+		{name: "broken pipe", err: syscall.EPIPE},
+		{name: "EOF", err: io.EOF, dial: true},
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, dial: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := ContextWithDockerConnection(t.Context(), []string{"--host=unix:///missing-dmr-engine.sock"}, func(context.Context) (net.Conn, error) {
+				if tt.dial {
+					return nil, tt.err
+				}
+				conn, peer := net.Pipe()
+				t.Cleanup(func() { _ = peer.Close() })
+				return &failingDockerConn{Conn: conn, err: tt.err}, nil
+			})
+			baseURL, client := ResolveBaseURL(ctx, nil, defaultContainerURL())
+			require.NotNil(t, client)
+			defer client.CloseIdleConnections()
+			_, err := ListModelsAt(t.Context(), client, baseURL)
+			require.ErrorIs(t, err, tt.err)
+			require.ErrorContains(t, err, "unix:///missing-dmr-engine.sock")
+			var requestErr *url.Error
+			require.ErrorAs(t, err, &requestErr)
+			assert.Equal(t, errors.Is(tt.err, context.DeadlineExceeded), requestErr.Timeout())
+		})
+	}
+}
+
+type failingDockerConn struct {
+	net.Conn
+
+	err error
+}
+
+func (c *failingDockerConn) Read([]byte) (int, error) {
+	return 0, c.err
+}
+
+func (c *failingDockerConn) Write([]byte) (int, error) {
+	return 0, c.err
 }
 
 func TestResolveSelectedDockerDoesNotProbeFallbacks(t *testing.T) {

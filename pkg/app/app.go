@@ -57,10 +57,11 @@ type App struct {
 	snapshotController     builtins.SnapshotController // Drives /undo, /snapshots, /reset; nil for runtimes that don't capture snapshots
 	streamGuard            sync.Locker                 // Held for the duration of every direct RunStream call; nil when not attached to a SessionManager (see WithStreamGuard)
 
-	startOnce  sync.Once
-	subsMu     sync.Mutex
-	subs       []chan tea.Msg
-	fanoutOnce sync.Once
+	eventGeneration atomic.Uint64
+	startOnce       sync.Once
+	subsMu          sync.Mutex
+	subs            []*eventSubscriber
+	fanoutOnce      sync.Once
 }
 
 // Opt is an option for creating a new App.
@@ -176,6 +177,7 @@ func (a *App) Start(ctx context.Context) {
 		// a.session concurrently, and it re-emits startup info for the new
 		// session itself.
 		sess := a.session
+		startupCtx := a.eventContext(ctx)
 		go func() {
 			startupEvents := make(chan runtime.Event, 10)
 			go func() {
@@ -183,7 +185,7 @@ func (a *App) Start(ctx context.Context) {
 				a.runtime.EmitStartupInfo(ctx, sess, runtime.NewChannelSink(startupEvents))
 			}()
 			for event := range startupEvents {
-				a.sendEvent(ctx, event)
+				a.sendEvent(startupCtx, event)
 			}
 		}()
 
@@ -196,9 +198,22 @@ func (a *App) Start(ctx context.Context) {
 		// Forward events surfaced from detached background work (token usage
 		// from background agent tasks) so the sidebar and agent inspector can
 		// account for background agents' context usage.
-		a.runtime.OnBackgroundEvent(func(event runtime.Event) {
-			a.sendEvent(ctx, event)
-		})
+		backgroundCtx := ctx
+		if _, ok := a.runtime.(interface{ RetireBackgroundEvents() }); ok {
+			backgroundCtx = a.eventContext(ctx)
+		}
+		if contextual, ok := a.runtime.(interface {
+			OnBackgroundEventWithContext(handler func(context.Context, runtime.Event))
+		}); ok {
+			contextual.OnBackgroundEventWithContext(func(origin context.Context, event runtime.Event) {
+				if origin == nil {
+					origin = ctx
+				}
+				a.sendEvent(context.WithoutCancel(origin), event)
+			})
+		} else {
+			a.runtime.OnBackgroundEvent(func(event runtime.Event) { a.sendEvent(backgroundCtx, event) })
+		}
 
 		// Forward elicitation requests raised anywhere in the runtime —
 		// including background-job (run_background_agent) sub-sessions whose
@@ -212,9 +227,18 @@ func (a *App) Start(ctx context.Context) {
 		// don't mirror it (RemoteRuntime, whose OnElicitationRequest below is
 		// a no-op) deliver elicitations only through that RunStream copy,
 		// which those loops forward unfiltered (#3584 review).
-		a.runtime.OnElicitationRequest(func(event runtime.Event) {
-			a.sendEvent(ctx, event)
-		})
+		if contextual, ok := a.runtime.(interface {
+			OnElicitationRequestWithContext(handler func(context.Context, runtime.Event))
+		}); ok {
+			contextual.OnElicitationRequestWithContext(func(origin context.Context, event runtime.Event) {
+				if origin == nil {
+					origin = ctx
+				}
+				a.sendEvent(origin, event)
+			})
+		} else {
+			a.runtime.OnElicitationRequest(func(event runtime.Event) { a.sendEvent(ctx, event) })
+		}
 	})
 }
 
@@ -419,6 +443,9 @@ func (a *App) SkillCommandFork(_ context.Context, input string) (skillName, task
 // opens the child; the sub-session's first user message is the expanded
 // SKILL.md body. Companion of SkillCommandFork.
 func (a *App) RunSkillFork(ctx context.Context, cancel context.CancelFunc, skillName, task string, _ []messages.Attachment) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.cancel = cancel
 	// Snapshot the session like Run does: the goroutines below outlive any
 	// concurrent ReplaceSession and must keep working against this session.
@@ -561,6 +588,9 @@ func (a *App) EmitStartupInfo(ctx context.Context, events chan runtime.Event) {
 
 // Run one agent loop
 func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string, attachments []messages.Attachment) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.cancel = cancel
 	sess := a.session
 
@@ -750,7 +780,7 @@ func (a *App) sendEvent(ctx context.Context, event tea.Msg) {
 	default:
 	}
 	select {
-	case a.events <- event:
+	case a.events <- a.stampEvent(ctx, event):
 	case <-ctx.Done():
 	case <-a.eventsDone:
 	}
@@ -805,6 +835,9 @@ func mustSkipMirroredElicitation(rt runtime.Runtime) bool {
 // suppress the pre-StreamStarted re-emitted user message; Run and
 // RunWithMessage pass nil.
 func (a *App) forwardRunStreamEvents(ctx context.Context, sess *session.Session, ch <-chan runtime.Event, filter func(event runtime.Event) (forward bool)) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
 
 	// sawRootStop/sawRootError/agentName drive the #4136 fallback below: the
@@ -952,6 +985,9 @@ func (a *App) processInlineAttachment(att messages.Attachment, textBuilder *stri
 // re-emission; genuine user messages injected mid-run (steer / follow-up)
 // arrive after StreamStarted and are forwarded normally.
 func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.cancel = cancel
 	sess := a.session
 
@@ -980,6 +1016,9 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 // RunWithMessage runs the agent loop with a pre-constructed message.
 // This is used for special cases like image attachments.
 func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg *session.Message) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.cancel = cancel
 	sess := a.session
 
@@ -1012,6 +1051,9 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 }
 
 func (a *App) RunBangCommand(ctx context.Context, command string) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	command = strings.TrimSpace(command)
 	if command == "" {
 		a.sendEvent(ctx, runtime.ShellOutput("Error: empty command"))
@@ -1078,8 +1120,9 @@ func (a *App) InjectUserMessage(ctx context.Context, content string) {
 // Slow subscribers drop events rather than block the bus.
 func (a *App) SubscribeWith(ctx context.Context, send func(tea.Msg)) {
 	ch := make(chan tea.Msg, subscriberBufferSize)
-	a.addSubscriber(ch)
-	defer a.removeSubscriber(ch)
+	sub := &eventSubscriber{ch: ch}
+	a.addSubscriber(sub)
+	defer a.removeSubscriber(sub)
 
 	a.fanoutOnce.Do(a.startFanOut)
 
@@ -1095,38 +1138,100 @@ func (a *App) SubscribeWith(ctx context.Context, send func(tea.Msg)) {
 	}
 }
 
-const subscriberBufferSize = 1024
+// SubscribeReliable delivers every event in order, buffering without a size
+// limit while send is blocked. Use it for the TUI: dropped deltas cannot recover.
+// Cancellation discards pending events; send must unblock when ctx is canceled.
+func (a *App) SubscribeReliable(ctx context.Context, send func(tea.Msg), opts ...SubscribeOption) {
+	queue := newEventQueue()
+	sub := &eventSubscriber{queue: queue}
+	for _, opt := range opts {
+		opt(sub)
+	}
+	a.addSubscriber(sub)
+	if sub.registered != nil {
+		sub.registered()
+	}
+	cleanup := func() {
+		queue.close()
+		a.removeSubscriber(sub)
+	}
+	finished := make(chan struct{})
+	defer close(finished)
+	defer cleanup()
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-a.eventsDone:
+		case <-finished:
+			return
+		}
+		cleanup()
+	}()
 
-func (a *App) addSubscriber(ch chan tea.Msg) {
-	a.subsMu.Lock()
-	defer a.subsMu.Unlock()
-	a.subs = append(a.subs, ch)
+	a.fanoutOnce.Do(a.startFanOut)
+
+	for {
+		msg, ok := queue.next(ctx, a.eventsDone)
+		if !ok {
+			return
+		}
+		send(msg)
+	}
 }
 
-func (a *App) removeSubscriber(ch chan tea.Msg) {
+const subscriberBufferSize = 1024
+
+func (a *App) addSubscriber(sub *eventSubscriber) {
 	a.subsMu.Lock()
 	defer a.subsMu.Unlock()
-	a.subs = slices.DeleteFunc(a.subs, func(c chan tea.Msg) bool { return c == ch })
+	a.subs = append(a.subs, sub)
+}
+
+func (a *App) removeSubscriber(sub *eventSubscriber) {
+	a.subsMu.Lock()
+	defer a.subsMu.Unlock()
+	a.subs = slices.DeleteFunc(a.subs, func(s *eventSubscriber) bool { return s == sub })
 }
 
 // startFanOut runs once per App. It throttles the raw events channel and
-// scatters every message to all currently-registered subscribers. Sends are
-// non-blocking; if a subscriber's buffer is full the event is dropped for
-// that subscriber so one slow consumer cannot stall the others.
-//
-// Turn-boundary events are the exception: dropping a stream_started or
-// stream_stopped skews a consumer's turn accounting for good (the SSE replay
-// buffer never sees the event, so reconnecting cannot recover it). For those,
-// the oldest pending message — almost always a content delta, which the next
-// delta supersedes — is evicted to make room instead.
+// scatters every message to all currently-registered subscribers. Reliable
+// subscribers queue every event; best-effort subscribers drop on overflow.
+// Turn boundaries evict the oldest pending best-effort delivery to preserve
+// turn accounting even when that subscriber falls behind.
 func (a *App) startFanOut() {
 	throttled := a.throttleEvents(a.ctx(), a.events)
 	go func() {
 		for msg := range throttled {
+			generation := a.eventGeneration.Load()
+			if stamped, ok := msg.(generationEvent); ok {
+				generation = stamped.generation
+				if stamped.generation != a.eventGeneration.Load() {
+					continue
+				}
+				msg = stamped.inner
+			}
 			a.subsMu.Lock()
 			subs := slices.Clone(a.subs)
 			a.subsMu.Unlock()
-			for _, ch := range subs {
+			for _, sub := range subs {
+				delivery := msg
+				if sub.prepareGeneration != nil {
+					delivery = sub.prepareGeneration(msg, generation)
+					if delivery == nil {
+						continue
+					}
+				}
+				if sub.prepare != nil {
+					delivery = sub.prepare(msg)
+					if delivery == nil {
+						continue
+					}
+				}
+				if sub.queue != nil {
+					sub.queue.pushGeneration(delivery, generation)
+					continue
+				}
+				ch := sub.ch
 				select {
 				case ch <- msg:
 				default:
@@ -1155,8 +1260,9 @@ func (a *App) startFanOut() {
 
 // isTurnBoundaryEvent reports whether msg is one of the events consumers use
 // to track turn state (running/waiting/failed/paused) and identity (title).
-// These are low-frequency and irrecoverable when lost, unlike the content
-// deltas that dominate the stream, so the fan-out prefers them on overflow.
+// These are low-frequency and keep best-effort consumers' turn accounting
+// usable on overflow. Content deltas are also irrecoverable; TUI consumers
+// must use SubscribeReliable instead.
 func isTurnBoundaryEvent(msg tea.Msg) bool {
 	switch msg.(type) {
 	case *runtime.StreamStartedEvent,
@@ -1279,6 +1385,7 @@ func (a *App) ResumeElicitation(ctx context.Context, action tools.ElicitationAct
 }
 
 func (a *App) NewSession() {
+	a.RetireEvents()
 	if a.cancel != nil {
 		a.cancel()
 		a.cancel = nil
@@ -1318,6 +1425,9 @@ func (a *App) NewSession() {
 // reEmitStartupInfo resets and re-emits startup info (agent, team, tools)
 // through the events channel so the sidebar updates.
 func (a *App) reEmitStartupInfo(ctx context.Context) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.runtime.ResetStartupInfo()
 	// Snapshot before handing off to the background goroutine so a later
 	// ReplaceSession cannot race with this read.
@@ -1342,7 +1452,7 @@ func (a *App) pumpToEvents(ctx context.Context, emit func(runtime.EventSink)) {
 				continue
 			}
 			select {
-			case a.events <- event:
+			case a.events <- a.stampEvent(ctx, event):
 			case <-ctx.Done():
 			case <-a.eventsDone:
 			default:
@@ -1437,6 +1547,9 @@ type liveSessionCompactor interface {
 // runtime cannot target live sessions (e.g. remote runtimes), or the
 // runtime's rejection for unknown/finished sessions and duplicate requests.
 func (a *App) CompactLiveSession(ctx context.Context, sessionID, additionalPrompt string) error {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	compactor, ok := a.runtime.(liveSessionCompactor)
 	if !ok {
 		return fmt.Errorf("targeted session compaction: %w", runtime.ErrUnsupported)
@@ -1717,6 +1830,9 @@ func (a *App) IsReadOnly() bool {
 }
 
 func (a *App) CompactSession(ctx context.Context, cancel context.CancelFunc, additionalPrompt string) {
+	if _, ok := ctx.Value(eventGenerationKey{}).(uint64); !ok {
+		ctx = a.eventContext(ctx)
+	}
 	a.cancel = cancel
 
 	sess := a.session
@@ -1769,6 +1885,7 @@ func (a *App) SessionStore() session.Store {
 // so the sidebar displays the agent and tool information.
 // If the session has stored model overrides, they are applied to the runtime.
 func (a *App) ReplaceSession(ctx context.Context, sess *session.Session) {
+	a.RetireEvents()
 	if a.cancel != nil {
 		a.cancel()
 		a.cancel = nil
@@ -1867,6 +1984,9 @@ func (a *App) throttleEvents(ctx context.Context, in <-chan tea.Msg) <-chan tea.
 
 // shouldThrottle determines if an event should be buffered/throttled
 func (a *App) shouldThrottle(msg tea.Msg) bool {
+	if stamped, ok := msg.(generationEvent); ok {
+		msg = stamped.inner
+	}
 	switch msg.(type) {
 	case *runtime.AgentChoiceEvent:
 		return true
@@ -1895,6 +2015,22 @@ func (a *App) mergeEvents(events []tea.Msg) []tea.Msg {
 	result := make([]tea.Msg, 0, len(events))
 
 	for i := 0; i < len(events); i++ {
+		if first, ok := events[i].(generationEvent); ok {
+			run := []tea.Msg{first.inner}
+			n := i + 1
+			for ; n < len(events); n++ {
+				next, ok := events[n].(generationEvent)
+				if !ok || next.generation != first.generation {
+					break
+				}
+				run = append(run, next.inner)
+			}
+			for _, merged := range a.mergeEvents(run) {
+				result = append(result, generationEvent{generation: first.generation, inner: merged})
+			}
+			i = n - 1
+			continue
+		}
 		switch ev := events[i].(type) {
 		case *runtime.AgentChoiceEvent:
 			merged, consumed := mergeAgentChoiceRun(ev, events[i+1:])
@@ -2144,6 +2280,7 @@ func (a *App) generateTitle(ctx context.Context, sess *session.Session, userMess
 // RegenerateSessionTitle triggers AI-based title regeneration for the current session.
 // Returns ErrTitleGenerating if a title generation is already in progress.
 func (a *App) RegenerateSessionTitle(ctx context.Context) error {
+	ctx = a.eventContext(ctx)
 	if a.session == nil {
 		return errors.New("no active session")
 	}

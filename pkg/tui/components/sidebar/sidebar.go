@@ -1362,6 +1362,14 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		m.invalidateCache()
 		cmd := m.startSpinner()
 		return m, cmd
+	case *runtime.SessionRecoveredEvent:
+		m.workingAgent = ""
+		m.sessionStack = nil
+		m.clearTransferPresentation()
+		m.compacting = false
+		m.invalidateCache()
+		m.stopSpinner()
+		return m, nil
 	case *runtime.StreamStoppedEvent:
 		m.workingAgent = ""
 		if n := len(m.sessionStack); n > 0 {

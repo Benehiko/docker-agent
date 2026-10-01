@@ -42,8 +42,7 @@ type Supervisor struct {
 	program  *tea.Program
 
 	// programReady is closed when SetProgram is called. Subscription goroutines
-	// wait on this before consuming events so that startup events (welcome message,
-	// agent info, tool info) are not silently dropped.
+	// wait on this before terminal delivery; registration happens before startup.
 	programReady     chan struct{}
 	programReadyOnce sync.Once
 }
@@ -84,10 +83,6 @@ func (s *Supervisor) AddSession(ctx context.Context, a *app.App, sess *session.S
 	// Create a cancellable context for this session
 	sessionCtx, cancel := context.WithCancel(ctx)
 	runner.cancel = cancel
-	if a != nil {
-		a.Start(sessionCtx)
-	}
-
 	s.runners[sess.ID] = runner
 	s.order = append(s.order, sess.ID)
 
@@ -97,7 +92,10 @@ func (s *Supervisor) AddSession(ctx context.Context, a *app.App, sess *session.S
 
 	// Start the subscription goroutine with routing
 	if a != nil {
-		go s.subscribeWithRouting(sessionCtx, a, sess.ID)
+		ready := make(chan struct{})
+		go s.subscribeWithRouting(sessionCtx, a, sess.ID, ready)
+		<-ready
+		a.Start(sessionCtx)
 	}
 
 	return sess.ID
@@ -119,30 +117,32 @@ func (s *Supervisor) SpawnSession(ctx context.Context, workingDir string) (strin
 }
 
 // subscribeWithRouting subscribes to app events and wraps them with session ID.
-// It waits for the program to be set before consuming events so that startup
-// events (welcome message, agent/team/tool info) are not dropped.
-func (s *Supervisor) subscribeWithRouting(ctx context.Context, a *app.App, sessionID string) {
-	// Wait for the program to be available before consuming any events.
-	// Events are buffered in app.events, so nothing is lost during this wait.
-	select {
-	case <-s.programReady:
-	case <-ctx.Done():
-		return
-	}
-
-	send := func(msg tea.Msg) {
+// Registration precedes startup; terminal delivery waits for the program.
+func (s *Supervisor) subscribeWithRouting(ctx context.Context, a *app.App, sessionID string, ready chan struct{}) {
+	prepare := func(msg tea.Msg, generation uint64) tea.Msg {
 		s.mu.RLock()
-		p, runner := s.program, s.runners[sessionID]
-		if p == nil || runner == nil || runner.App != a || ctx.Err() != nil {
-			s.mu.RUnlock()
+		defer s.mu.RUnlock()
+		runner := s.runners[sessionID]
+		if runner == nil || runner.App != a || ctx.Err() != nil {
+			return nil
+		}
+		return messages.RoutedMsg{SessionID: sessionID, Scope: runner.Scope, Inner: msg, Valid: func() bool { return a.IsEventGeneration(generation) }}
+	}
+	send := func(msg tea.Msg) {
+		select {
+		case <-s.programReady:
+		case <-ctx.Done():
 			return
 		}
-		scope := runner.Scope
+		s.mu.RLock()
+		p := s.program
 		s.mu.RUnlock()
-		p.Send(messages.RoutedMsg{SessionID: sessionID, Scope: scope, Inner: msg})
+		if p != nil && ctx.Err() == nil {
+			p.Send(msg)
+		}
 	}
 
-	a.SubscribeWith(ctx, send)
+	a.SubscribeReliable(ctx, send, app.WithGenerationEventMapper(prepare), app.WithSubscriptionReady(func() { close(ready) }))
 }
 
 // RetirePage invalidates runtime deliveries already queued for the previous page.
@@ -150,6 +150,9 @@ func (s *Supervisor) RetirePage(tabID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if runner := s.runners[tabID]; runner != nil {
+		if runner.App != nil {
+			runner.App.RetireEvents()
+		}
 		runner.Scope = &messages.RouteScope{}
 	}
 }
@@ -274,8 +277,6 @@ func (s *Supervisor) ReplaceRunnerApp(ctx context.Context, sessionID string, new
 	// Create a new cancellable context for the replacement.
 	sessionCtx, cancel := context.WithCancel(ctx)
 	runner.cancel = cancel
-	newApp.Start(sessionCtx)
-
 	s.notifyTabsUpdated()
 	s.mu.Unlock()
 
@@ -285,7 +286,10 @@ func (s *Supervisor) ReplaceRunnerApp(ctx context.Context, sessionID string, new
 	}
 
 	// Start routing events from the new app.
-	go s.subscribeWithRouting(sessionCtx, newApp, sessionID)
+	ready := make(chan struct{})
+	go s.subscribeWithRouting(sessionCtx, newApp, sessionID, ready)
+	<-ready
+	newApp.Start(sessionCtx)
 }
 
 // ActiveID returns the ID of the currently active session.

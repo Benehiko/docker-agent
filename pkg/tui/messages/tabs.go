@@ -12,6 +12,7 @@ type RouteScope struct{ _ byte }
 type RoutedMsg struct {
 	SessionID string      // The session ID this message is for
 	Inner     tea.Msg     // The wrapped message
+	Valid     func() bool // Checks producer lifetime at consumption.
 	Scope     *RouteScope // Set by runtime subscriptions; nil for page-owned messages.
 }
 

@@ -151,3 +151,13 @@ func TestReplaceSessionRetainsSameConversation(t *testing.T) {
 	assert.False(t, running)
 	assert.False(t, attention)
 }
+
+func TestRecoveryPreservesDetachedRequests(t *testing.T) {
+	t.Parallel()
+	state := New("root", "")
+	detached := runtime.ElicitationRequest("request", "form", nil, "", "child-request", "", "child", nil, "worker")
+	state.Apply(detached, false)
+	state.Apply(runtime.SessionRecovered("root"), false)
+	require.Same(t, detached, state.Consume())
+	require.False(t, state.RetiresAttention(runtime.SessionRecovered("root"), detached))
+}

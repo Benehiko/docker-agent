@@ -265,6 +265,7 @@ type LocalRuntime struct {
 	// the sink being (re)registered.
 	elicitationSinkMu    sync.RWMutex
 	onElicitationRequest func(Event)
+	onElicitationContext func(context.Context, Event)
 	sessionStore         session.Store
 	// generatedFiles caches per-owner-session workspace roots and manifest
 	// records for [LocalRuntime.ResolveGeneratedFile]. Seeded by
@@ -378,8 +379,9 @@ type LocalRuntime struct {
 	// background work (e.g. background agent tasks). Protected by
 	// backgroundEventMu because background tasks read it from their own
 	// goroutines.
-	backgroundEventMu sync.RWMutex
-	onBackgroundEvent func(Event)
+	backgroundEventMu   sync.RWMutex
+	onBackgroundEvent   func(Event)
+	onBackgroundContext func(context.Context, Event)
 
 	bgAgents *agenttool.Handler
 
@@ -1654,14 +1656,28 @@ func (r *LocalRuntime) OnBackgroundEvent(handler func(Event)) {
 	r.backgroundEventMu.Lock()
 	defer r.backgroundEventMu.Unlock()
 	r.onBackgroundEvent = handler
+	r.onBackgroundContext = nil
+}
+
+// OnBackgroundEventWithContext preserves detached producer ownership.
+func (r *LocalRuntime) OnBackgroundEventWithContext(handler func(context.Context, Event)) {
+	r.backgroundEventMu.Lock()
+	defer r.backgroundEventMu.Unlock()
+	r.onBackgroundContext = handler
+	r.onBackgroundEvent = nil
 }
 
 // emitBackgroundEvent forwards an event from detached background work to the
 // registered handler, if any.
-func (r *LocalRuntime) emitBackgroundEvent(event Event) {
+func (r *LocalRuntime) emitBackgroundEvent(ctx context.Context, event Event) {
 	r.backgroundEventMu.RLock()
 	handler := r.onBackgroundEvent
+	contextual := r.onBackgroundContext
 	r.backgroundEventMu.RUnlock()
+	if contextual != nil {
+		contextual(ctx, event)
+		return
+	}
 	if handler != nil {
 		handler(event)
 	}

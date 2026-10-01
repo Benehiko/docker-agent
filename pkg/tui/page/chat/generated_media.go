@@ -63,24 +63,44 @@ func (p *chatPage) handleMessageAdded(msg *runtime.MessageAddedEvent) tea.Cmd {
 	if p.streamCancelled || msg.Message.Message.Role != chat.MessageRoleAssistant {
 		return nil
 	}
-	if !p.app.CanResolveGeneratedFiles() {
+	if msg.Message.Implicit {
 		return nil
 	}
-	placeholders, requests := generatedImageMedia(msg.Message.Message.MultiContent)
-	if len(placeholders) == 0 {
-		return nil
+	sessionID := p.contentSession(msg.SessionID)
+	identity := p.contentIdentity.Resolve(sessionID, msg.Message.Message.MessageID)
+	if msg.Message.Message.Content != "" {
+		defer p.contentIdentity.Finish(sessionID)
 	}
-
-	p.trackContentSession(msg.SessionID)
-	p.hasReceivedAssistantContent = true
-	p.setPendingResponse(false)
 	agentName := msg.Message.AgentName
 	if agentName == "" {
 		agentName = msg.AgentName
 	}
+	var placeholders []types.AssistantMedia
+	var requests []generatedMediaRequest
+	if p.app.CanResolveGeneratedFiles() {
+		placeholders, requests = p.generatedImageMedia(identity.SessionID, identity.MessageID, msg.Message.Message.MultiContent)
+		p.messages.AdoptAssistantMediaIdentity(identity.SessionID, identity.MessageID, agentName, placeholders)
+	}
+	content := chat.VisibleAssistantContent(msg.Message.Message.Content)
+	var contentCmd tea.Cmd
+	if content != "" {
+		contentCmd = p.messages.ReconcileAssistantContent(identity.SessionID, identity.MessageID, agentName, content)
+		p.hasReceivedAssistantContent = true
+		p.setPendingResponse(false)
+	}
+	if !p.app.CanResolveGeneratedFiles() {
+		return contentCmd
+	}
+	if len(placeholders) == 0 {
+		return contentCmd
+	}
+	p.trackContentSession(msg.SessionID)
+	p.hasReceivedAssistantContent = true
+	p.setPendingResponse(false)
 	return tea.Batch(
+		contentCmd,
 		p.sidebar.SetAgentActivity(agentName),
-		p.messages.AppendAssistantMedia(agentName, placeholders),
+		p.messages.AppendAssistantMediaContent(identity.SessionID, identity.MessageID, agentName, placeholders),
 		p.resolveGeneratedMediaCmd(requests),
 	)
 }
@@ -99,7 +119,7 @@ func (p *chatPage) collectRestoredGeneratedMedia(sess *session.Session) (map[int
 		if !item.IsMessage() || item.Message.Implicit || item.Message.Message.Role != chat.MessageRoleAssistant {
 			continue
 		}
-		placeholders, reqs := generatedImageMedia(item.Message.Message.MultiContent)
+		placeholders, reqs := p.generatedImageMedia(sess.ID, item.Message.Message.MessageID, item.Message.Message.MultiContent)
 		if len(placeholders) == 0 {
 			continue
 		}
@@ -119,7 +139,7 @@ func (p *chatPage) collectRestoredGeneratedMedia(sess *session.Session) (map[int
 // supports additionally get a resolution request. References with an
 // unknown (empty) root kind stay unavailable by design. User attachments
 // (inline sources) and ownerless references are not extracted.
-func generatedImageMedia(parts []chat.MessagePart) ([]types.AssistantMedia, []generatedMediaRequest) {
+func (p *chatPage) generatedImageMedia(sessionID, messageID string, parts []chat.MessagePart) ([]types.AssistantMedia, []generatedMediaRequest) {
 	var media []types.AssistantMedia
 	var requests []generatedMediaRequest
 	for _, part := range parts {
@@ -139,9 +159,23 @@ func generatedImageMedia(parts []chat.MessagePart) ([]types.AssistantMedia, []ge
 		if name == "" {
 			name = "generated media"
 		}
-		item := types.AssistantMedia{Fallback: fmt.Sprintf("Generated image %q is unavailable.", name)}
-		if src.ArtifactRoot == chat.ArtifactRootWorkspace {
-			item.ID = generatedMediaIDs.Add(1)
+		keyMessageID := messageID
+		if strings.HasPrefix(messageID, "legacy:") {
+			keyMessageID = ""
+		}
+		key := fmt.Sprintf("%q:%q:%q:%q:%q:%q:%q", sessionID, keyMessageID, src.ArtifactOwnerSessionID, src.ArtifactRoot, src.ArtifactPath, doc.MimeType, name)
+		if p.mediaKeys == nil {
+			p.mediaKeys = make(map[string]uint64)
+		}
+		id, seen := p.mediaKeys[key]
+		if !seen {
+			if src.ArtifactRoot == chat.ArtifactRootWorkspace {
+				id = generatedMediaIDs.Add(1)
+			}
+			p.mediaKeys[key] = id
+		}
+		item := types.AssistantMedia{ID: id, Key: key, Fallback: fmt.Sprintf("Generated image %q is unavailable.", name)}
+		if src.ArtifactRoot == chat.ArtifactRootWorkspace && !seen {
 			requests = append(requests, generatedMediaRequest{
 				id: item.ID,
 				ref: runtime.GeneratedFileRef{

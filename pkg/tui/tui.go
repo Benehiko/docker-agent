@@ -1542,6 +1542,9 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleRoutedMsg processes messages routed to specific sessions.
 func (m *appModel) handleRoutedMsg(msg messages.RoutedMsg) (tea.Model, tea.Cmd) {
+	if msg.Valid != nil && !msg.Valid() {
+		return m, nil
+	}
 	runner := m.supervisor.GetRunner(msg.SessionID)
 	if msg.Scope != nil && (runner == nil || runner.Scope != msg.Scope) {
 		return m, nil

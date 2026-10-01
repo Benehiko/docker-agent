@@ -64,7 +64,7 @@ For an agent loaded from a remote HTTP(S) configuration source, endpoints that n
 | `GET`    | `/api/sessions/:id`                 | Get a session by ID (messages, tokens, permissions)     |
 | `GET`    | `/api/sessions/:id/status`          | Lightweight runtime state (streaming, title, agent, tokens). Requires an attached runtime. |
 | `GET`    | `/api/sessions/:id/snapshot`        | Full state in one call (stored fields + runtime state + `last_event_seq`) for gapless resync — see [Reconnecting without gaps](#reconnecting-without-gaps). |
-| `GET`    | `/api/sessions/:id/events`          | Live session event stream (SSE) with sequence numbers and replay. Available for a run attached via [`--listen`](#listen), or once a session has raised at least one out-of-band event (e.g. a background job's elicitation, answered via `POST .../elicitation`), which creates a session-scoped event log on demand carrying such out-of-band events — see [Session event stream](#session-event-stream-and-reconnection) for what each kind of log contains. |
+| `GET`    | `/api/sessions/:id/events`          | Live session event stream (SSE) with sequence numbers and replay. Available for a run attached via [`--listen`](#listen), or once a session has raised at least one out-of-band event (e.g. a background job's elicitation or an idle-session recall), which creates a session-scoped event log on demand carrying such out-of-band events — see [Session event stream](#session-event-stream-and-reconnection) for what each kind of log contains. |
 | `DELETE` | `/api/sessions/:id`                 | Delete a session                                        |
 | `PATCH`  | `/api/sessions/:id/title`           | Update session title                                    |
 | `PATCH`  | `/api/sessions/:id/permissions`     | Update session permissions                              |
@@ -277,6 +277,17 @@ $ curl -X POST http://127.0.0.1:8080/api/sessions/$SID/followup \
 
 ## Session event stream and reconnection
 
+The Go remote client reconnects sequenced `/events` streams from the last received
+ID. After a replay gap, the remote TUI waits for an idle snapshot and recovers
+missing plain assistant text by message ID. Tool results, reasoning, and transient
+interaction events are not reconstructed; a warning reports this limitation.
+Ambiguous histories fail visibly instead of replaying answers twice.
+
+Foreground POST run streams are not automatically resubmitted after interruption:
+retrying a run could repeat tool side effects. A stream ending without a root
+`stream_stopped` event reports an incomplete-response error. Streaming requests
+are not subject to the metadata client's 30-second total timeout.
+
 `GET /api/sessions/:id/events` is a **Server-Sent Events** stream of the
 session's runtime events — `stream_started`, `agent_choice`, `tool_call`,
 `session_title`, `token_usage`, `stream_stopped`, and so on. Unlike the
@@ -284,7 +295,7 @@ per-request stream returned by the agent-execution endpoint, it is
 session-scoped and survives across turns, so a client can watch a session for
 its whole lifetime. It is available for a run attached via
 [`--listen`](#listen), and — since a session-scoped event log is created on
-demand the first time a session raises an out-of-band event, such as an
+demand the first time a session runs an idle recall or raises an out-of-band event, such as an
 `elicitation_request` from a background job — for any API-created session
 that has produced at least one (see the
 [Sessions endpoint table](#sessions) above). The two kinds of log differ in

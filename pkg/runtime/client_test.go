@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,5 +125,248 @@ func TestClient_StreamSessionEvents_StopsWhenContextCancelled(t *testing.T) {
 		case <-deadline:
 			t.Fatal("channel was not closed after context cancel")
 		}
+	}
+}
+
+func TestClient_RunAgentIgnoresTotalHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	proceed := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"warning\",\"message\":\"first\"}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-proceed:
+			fmt.Fprint(w, "data: {\"type\":\"warning\",\"message\":\"last\"}\n\ndata: {\"type\":\"stream_stopped\"}\n\n")
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL, WithHTTPClient(&http.Client{Timeout: 100 * time.Millisecond}))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	stream, err := c.RunAgent(ctx, "s", "agent.yaml", nil, "")
+	require.NoError(t, err)
+	first := awaitEvent[*WarningEvent](t, stream, "first event")
+	assert.Equal(t, "first", first.Message)
+	// Let the configured total timeout expire while the stream is healthy.
+	<-time.After(200 * time.Millisecond)
+	close(proceed)
+	var got []Event
+	for event := range stream {
+		got = append(got, event)
+	}
+	require.Len(t, got, 2)
+	assert.IsType(t, &StreamStoppedEvent{}, got[1])
+	last, ok := got[0].(*WarningEvent)
+	require.True(t, ok, "got %T", got[0])
+	assert.Equal(t, "last", last.Message)
+	assert.Equal(t, 100*time.Millisecond, c.httpClient.Timeout, "do not mutate the supplied client")
+}
+
+func TestClient_StreamSessionEventsReconnectsFromLastDeliveredID(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch calls.Add(1) {
+		case 1:
+			assert.Empty(t, r.Header.Get("Last-Event-ID"))
+			fmt.Fprint(w, "id: 1\ndata: {\"type\":\"session_title\",\"title\":\"one\"}\n\n")
+			fmt.Fprint(w, "id: 2\ndata: {\"type\":\"future_event\"}\n\n")
+		case 2:
+			assert.Equal(t, "2", r.Header.Get("Last-Event-ID"), "unknown events advance the cursor too")
+			fmt.Fprint(w, "id: 2\ndata: {\"type\":\"session_title\",\"title\":\"duplicate\"}\n\n")
+			fmt.Fprint(w, "id: 3\ndata: {\"type\":\"session_title\",\"title\":\"three\"}\n\n")
+			fmt.Fprint(w, "id: 4\ndata: {\"type\":\"session_exited\"}\n\n")
+		default:
+			t.Error("reconnected after session_exited")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL, WithAuthToken("secret"))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stream, err := c.StreamSessionEvents(ctx, "s")
+	require.NoError(t, err)
+	var titles []string
+	for event := range stream {
+		title, ok := event.(*SessionTitleEvent)
+		require.True(t, ok, "got %T", event)
+		titles = append(titles, title.Title)
+	}
+	assert.Equal(t, []string{"one", "three"}, titles)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestClient_StreamSessionEventsGapRequiresSnapshot(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		assert.Equal(t, "7", r.Header.Get("Last-Event-ID"))
+		assert.Empty(t, r.URL.Query().Get("since"))
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"gap\"}\n\nid: 99\ndata: {\"type\":\"session_title\",\"title\":\"partial history\"}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL + "?since=1")
+	require.NoError(t, err)
+	stream, err := c.StreamSessionEventsSince(t.Context(), "s", 7)
+	require.NoError(t, err)
+	var got []Event
+	for event := range stream {
+		got = append(got, event)
+	}
+	require.Len(t, got, 1)
+	failure, ok := got[0].(*ErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, failure.Error, "reload the session snapshot")
+	assert.Equal(t, int32(1), calls.Load())
+}
+
+func TestClient_SSECancelWithUnreadFullBuffer(t *testing.T) {
+	t.Parallel()
+
+	for _, run := range []bool{false, true} {
+		t.Run(fmt.Sprintf("run=%v", run), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				for i := range 2 * defaultEventChannelCapacity {
+					fmt.Fprintf(w, "id: %d\ndata: {\"type\":\"warning\",\"message\":\"x\"}\n\n", i+1)
+				}
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			t.Cleanup(srv.Close)
+			c, err := NewClient(srv.URL)
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			var stream <-chan Event
+			if run {
+				stream, err = c.RunAgent(ctx, "s", "agent.yaml", nil, "")
+			} else {
+				stream, err = c.StreamSessionEvents(ctx, "s")
+			}
+			require.NoError(t, err)
+			require.Eventually(t, func() bool { return len(stream) == defaultEventChannelCapacity }, 2*time.Second, time.Millisecond)
+			cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for range stream {
+				}
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cancelled stream stayed open")
+			}
+		})
+	}
+}
+
+func TestClient_StreamSessionEventsReconnectsAfterEmptyConnection(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 {
+			fmt.Fprint(w, ": ping\n\n")
+			return
+		}
+		assert.Equal(t, "0", r.Header.Get("Last-Event-ID"))
+		fmt.Fprint(w, "id: 1\ndata: {\"type\":\"session_title\",\"title\":\"recovered\"}\n\nid: 2\ndata: {\"type\":\"session_exited\"}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	stream, err := c.StreamSessionEvents(ctx, "s")
+	require.NoError(t, err)
+	var got []Event
+	for event := range stream {
+		got = append(got, event)
+	}
+	require.Len(t, got, 1)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestClient_StreamSessionEventsIgnoresTotalHTTPTimeout(t *testing.T) {
+	t.Parallel()
+
+	proceed := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "id: 1\ndata: {\"type\":\"session_title\",\"title\":\"first\"}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-proceed:
+			fmt.Fprint(w, "id: 2\ndata: {\"type\":\"session_title\",\"title\":\"last\"}\n\nid: 3\ndata: {\"type\":\"session_exited\"}\n\n")
+		case <-req.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client, err := NewClient(srv.URL, WithTimeout(100*time.Millisecond))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	stream, err := client.StreamSessionEvents(ctx, "s")
+	require.NoError(t, err)
+	first := awaitEvent[*SessionTitleEvent](t, stream, "first event")
+	assert.Equal(t, "first", first.Title)
+	<-time.After(200 * time.Millisecond)
+	close(proceed)
+	var got []Event
+	for event := range stream {
+		got = append(got, event)
+	}
+	require.Len(t, got, 1)
+	last, ok := got[0].(*SessionTitleEvent)
+	require.True(t, ok, "got %T", got[0])
+	assert.Equal(t, "last", last.Title)
+}
+
+func TestClient_RunAgentIncompleteStreamIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for _, data := range []string{
+		"",
+		`{"type":"agent_choice","content":"partial"}`,
+		`{"type":"stream_stopped","session_id":"child"}`,
+		`{"type":"stream_stopped",`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			t.Parallel()
+			var runs atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				runs.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				if data != "" {
+					fmt.Fprintf(w, "data: %s\n\n", data)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			client, err := NewClient(srv.URL)
+			require.NoError(t, err)
+			stream, err := client.RunAgent(t.Context(), "s", "agent.yaml", nil, "")
+			require.NoError(t, err)
+			var got []Event
+			for event := range stream {
+				got = append(got, event)
+			}
+			require.NotEmpty(t, got)
+			assert.IsType(t, &ErrorEvent{}, got[len(got)-1])
+			assert.Equal(t, int32(1), runs.Load(), "never resubmit a truncated run")
+		})
 	}
 }

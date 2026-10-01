@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/sound"
@@ -17,6 +18,12 @@ import (
 // handleEvent applies a single runtime event emitted by the App to the model,
 // updating the conversation, tool state, status footer, or busy state.
 func (m *model) handleEvent(ctx context.Context, ev any) {
+	if routed, ok := ev.(leanEvent); ok {
+		if (routed.valid != nil && !routed.valid()) || routed.generation != m.eventGeneration.Load() {
+			return
+		}
+		ev = routed.inner
+	}
 	switch e := ev.(type) {
 	case fileCompletionsLoaded:
 		m.screen.Autocomplete.SetFiles(e)
@@ -28,6 +35,7 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			m.submitFollowUp(ctx, e.Content)
 		}
 	case *runtime.StreamStartedEvent:
+		m.contentIdentity.Finish(m.contentSession(e.SessionID))
 		if m.streamDepth == 0 {
 			m.streamStartTime = time.Now()
 		}
@@ -36,7 +44,23 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStarted(e.SessionID)
 	case *runtime.UserMessageEvent:
 		m.handleUserMessageEvent(e)
+	case *runtime.SessionRecoveredEvent:
+		if e.SessionID != "" && e.SessionID != m.contentSession("") {
+			return
+		}
+		m.screen.Transcript.FlushPending()
+		m.screen.Transcript.FinalizeTools(tuitypes.ToolStatusError, m.sessionState)
+		m.streamDepth = 0
+		m.usage.RecoverIdle(m.contentSession(e.SessionID))
+		m.applyUsageSnapshot()
+		m.busy = false
+		m.runCancel = nil
+		m.cancelMarkerPending = false
+		m.screen.Confirm = nil
+		m.status.Compacting = false
+		m.contentIdentity.Finish(m.contentSession(e.SessionID))
 	case *runtime.StreamStoppedEvent:
+		m.contentIdentity.Finish(m.contentSession(e.SessionID))
 		m.trackStreamStopped()
 		m.streamDepth = max(0, m.streamDepth-1)
 		if m.streamDepth > 0 {
@@ -45,9 +69,17 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.notifyStreamStopped(ctx, e.Reason)
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
-		m.screen.Transcript.AppendReasoning(e.Content)
+		m.screen.Transcript.AppendReasoningContent(m.contentIdentity.Resolve(m.contentSession(e.SessionID), e.MessageID), e.Content)
 	case *runtime.AgentChoiceEvent:
-		m.screen.Transcript.AppendAssistant(e.Content)
+		m.screen.Transcript.AppendAssistantContent(m.contentIdentity.Resolve(m.contentSession(e.SessionID), e.MessageID), e.Content)
+	case *runtime.MessageAddedEvent:
+		if e.Message == nil || e.Message.Implicit || e.Message.Message.Role != chat.MessageRoleAssistant {
+			return
+		}
+		sessionID := m.contentSession(e.SessionID)
+		identity := m.contentIdentity.Resolve(sessionID, e.Message.Message.MessageID)
+		m.screen.Transcript.ReconcileAssistantContent(identity, chat.VisibleAssistantContent(e.Message.Message.Content))
+		m.contentIdentity.Finish(sessionID)
 	case *runtime.PartialToolCallEvent:
 		m.screen.Transcript.FlushPending()
 		toolDef := tools.Tool{Name: e.ToolCall.Function.Name}
@@ -244,4 +276,11 @@ func (m *model) notifyStreamStopped(ctx context.Context, reason string) {
 			m.playSound(ctx, sound.Success)
 		}
 	}
+}
+
+func (m *model) contentSession(sessionID string) string {
+	if sessionID == "" && m.app != nil && m.app.Session() != nil {
+		return m.app.Session().ID
+	}
+	return sessionID
 }

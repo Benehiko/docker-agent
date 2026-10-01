@@ -73,12 +73,15 @@ type AssistantMedia struct {
 	// replaces it (see messages.Model.UpdateAssistantMedia). Zero means
 	// static: the item is final and never replaced.
 	ID       uint64
+	Key      string // Stable manifest identity; never rendered.
 	Image    *tuiimage.Inline
 	Fallback string
 }
 
 // Message represents a single message in the chat
 type Message struct {
+	SessionID      string
+	MessageID      string
 	Type           MessageType
 	Content        string
 	Sender         string                // Agent name for assistant messages

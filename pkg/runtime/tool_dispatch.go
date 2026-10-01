@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"uuid"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
@@ -188,7 +189,15 @@ func denySourceFor(checkerSource string) string {
 // and max-iteration stop messages. The dispatcher emits its own variant
 // directly via the [toolexec.Emitter] interface.
 func addAgentMessage(sess *session.Session, a *agent.Agent, msg *chat.Message, events EventSink) {
+	// Synthetic answers have no streaming phase; announce their text on the wire too.
+	synthetic := msg.Role == chat.MessageRoleAssistant && msg.MessageID == ""
+	if synthetic {
+		msg.MessageID = uuid.NewV4().String()
+	}
 	agentMsg := session.NewAgentMessage(a.Name(), msg)
 	sess.AddMessage(agentMsg)
+	if synthetic && msg.Content != "" {
+		events.Emit(AgentChoice(a.Name(), sess.ID, chat.VisibleAssistantContent(msg.Content), msg.MessageID))
+	}
 	events.Emit(MessageAdded(sess.ID, agentMsg, a.Name()))
 }

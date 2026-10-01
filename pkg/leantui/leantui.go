@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/editor/completions"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
+	"github.com/docker/docker-agent/pkg/tui/streamcontent"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
@@ -93,14 +95,19 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	go readKeys(term.Reader(), keys, done)
+	subscriptionReady := make(chan struct{})
 	go func() {
-		m.app.SubscribeWith(loopCtx, func(msg tea.Msg) {
+		m.app.SubscribeReliable(loopCtx, func(msg tea.Msg) {
 			select {
 			case events <- msg:
 			case <-done:
 			}
-		})
+		}, app.WithSubscriptionReady(func() { close(subscriptionReady) }), app.WithGenerationEventMapper(func(msg tea.Msg, generation uint64) tea.Msg {
+			return leanEvent{generation: m.eventGeneration.Load(), inner: msg, valid: func() bool { return m.app.IsEventGeneration(generation) }}
+		}))
 	}()
+	<-subscriptionReady
+	m.app.Start(loopCtx)
 	go func() {
 		for {
 			w, h, ok := term.Resized()
@@ -191,10 +198,17 @@ func readKeys(r io.Reader, keys chan<- ui.Key, done <-chan struct{}) {
 	}
 }
 
+type leanEvent struct {
+	generation uint64
+	inner      tea.Msg
+	valid      func() bool
+}
+
 type model struct {
-	app  *app.App
-	term *ui.Terminal
-	r    *ui.Renderer
+	eventGeneration atomic.Uint64
+	app             *app.App
+	term            *ui.Terminal
+	r               *ui.Renderer
 
 	width  int
 	height int
@@ -205,6 +219,7 @@ type model struct {
 	sessionState *service.SessionState
 	usage        *ui.UsageTracker
 
+	contentIdentity     streamcontent.Tracker
 	streamDepth         int
 	streamStartTime     time.Time
 	playSound           func(context.Context, sound.Event)

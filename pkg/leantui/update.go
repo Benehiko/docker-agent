@@ -337,6 +337,7 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 		m.quit()
 		return true
 	case "new":
+		m.eventGeneration.Add(1)
 		m.app.NewSession()
 		m.resetConversation()
 		m.addNotice("", "Started a new session.", ui.StMuted())
@@ -495,6 +496,7 @@ func (m *model) resumeSession(ctx context.Context, sessionID string) {
 		return
 	}
 
+	m.eventGeneration.Add(1)
 	m.app.ReplaceSession(ctx, sess)
 	m.resetConversation()
 	m.screen.Transcript = ui.NewTranscript()
@@ -533,13 +535,16 @@ func (m *model) loadSessionTranscript(sess *session.Session) {
 		case chat.MessageRoleUser:
 			m.addUserEcho(content)
 		case chat.MessageRoleAssistant:
+			content = chat.VisibleAssistantContent(content)
 			if msg.Message.ReasoningContent != "" {
 				reasoning := msg.Message.ReasoningContent
 				m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderReasoningLines(reasoning, w) })
 			}
 			if content != "" {
-				answer := content
-				m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderAssistantLines(answer, w) })
+				identity := m.contentIdentity.Resolve(sess.ID, msg.Message.MessageID)
+				m.screen.Transcript.AppendAssistantContent(identity, content)
+				m.screen.Transcript.FlushPending()
+				m.contentIdentity.Finish(sess.ID)
 			}
 			for i, toolCall := range msg.Message.ToolCalls {
 				toolDef := tools.Tool{}

@@ -1273,9 +1273,13 @@ agents:
 ```
 
 See [`examples/hook_routing.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing.yaml)
-(evaluator selector with `researcher → reviewer` continuation via `force_handoff`) and
+(evaluator selector with `researcher → reviewer` continuation via `force_handoff`),
 [`examples/hook_routing_command.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing_command.yaml)
-(offline command selector).
+(offline entry selector),
+[`examples/hook_routing_local.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing_local.yaml)
+(entry selector backed by a local AutoJEV server), and
+[`examples/hook_routing_completion.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing_completion.yaml)
+(JEV evaluates a completed answer and routes it to review or directly to a finalizer).
 
 ### When the events fire
 

@@ -197,7 +197,7 @@ func addAgentMessage(sess *session.Session, a *agent.Agent, msg *chat.Message, e
 	agentMsg := session.NewAgentMessage(a.Name(), msg)
 	sess.AddMessage(agentMsg)
 	if synthetic && msg.Content != "" {
-		events.Emit(AgentChoice(a.Name(), sess.ID, msg.Content, msg.MessageID))
+		events.Emit(AgentChoice(a.Name(), sess.ID, chat.VisibleAssistantContent(msg.Content), msg.MessageID))
 	}
 	events.Emit(MessageAdded(sess.ID, agentMsg, a.Name()))
 }

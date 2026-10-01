@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pb33f/libopenapi"
 	"github.com/pb33f/libopenapi/datamodel/high/base"
@@ -36,6 +37,9 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	if toolset.Timeout > 0 {
 		opts = append(opts, WithTimeout(time.Duration(toolset.Timeout)*time.Second))
 	}
+	if toolset.MaxOutputBytes != nil {
+		opts = append(opts, WithMaxOutputBytes(*toolset.MaxOutputBytes))
+	}
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
@@ -50,6 +54,7 @@ type ToolSet struct {
 	headers map[string]string
 
 	timeout         time.Duration
+	maxOutputBytes  int
 	allowPrivateIPs bool
 	expander        *js.Expander
 }
@@ -70,6 +75,12 @@ func WithTimeout(d time.Duration) Option {
 	return func(t *ToolSet) { t.timeout = d }
 }
 
+// WithMaxOutputBytes limits the returned text; zero disables this cutoff.
+// The HTTP response still has a separate 1 MiB read limit.
+func WithMaxOutputBytes(limit int) Option {
+	return func(t *ToolSet) { t.maxOutputBytes = limit }
+}
+
 // WithAllowPrivateIPs disables SSRF dial-time protection on both the spec
 // fetch and the generated tools' HTTP calls. Operators opt in via
 // `allow_private_ips: true` when the spec or its servers legitimately
@@ -85,9 +96,10 @@ func WithExpander(expander *js.Expander) Option {
 // New creates a new OpenAPI toolset from the given spec URL.
 func New(specURL string, headers map[string]string, opts ...Option) *ToolSet {
 	t := &ToolSet{
-		specURL: specURL,
-		headers: headers,
-		timeout: httpclient.DefaultToolHTTPTimeout,
+		specURL:        specURL,
+		headers:        headers,
+		timeout:        httpclient.DefaultToolHTTPTimeout,
+		maxOutputBytes: maxOutputSize,
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -256,6 +268,7 @@ func (t *ToolSet) operationToTool(baseURL, path, method string, op *v3.Operation
 			method:          method,
 			headers:         t.headers,
 			timeout:         t.timeout,
+			maxOutputBytes:  t.maxOutputBytes,
 			allowPrivateIPs: t.allowPrivateIPs,
 			expander:        t.expander,
 		}).callTool),
@@ -447,6 +460,7 @@ type openAPIHandler struct {
 	headers map[string]string
 
 	timeout         time.Duration
+	maxOutputBytes  int
 	allowPrivateIPs bool
 	expander        *js.Expander
 }
@@ -495,8 +509,18 @@ func (h *openAPIHandler) callTool(ctx context.Context, params openAPICallArgs) (
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	output := limitOutput(string(body))
-	if len(body) >= 1<<20 {
+	bodyTruncated := len(body) >= 1<<20
+	if bodyTruncated {
+		start := len(body) - 1
+		for start > 0 && !utf8.RuneStart(body[start]) {
+			start--
+		}
+		if !utf8.FullRune(body[start:]) {
+			body = body[:start]
+		}
+	}
+	output := limitOutput(string(body), h.maxOutputBytes)
+	if bodyTruncated {
 		output = "[WARNING: Response truncated at 1MB limit]\n" + output
 	}
 

@@ -274,6 +274,110 @@ agents:
 	}
 }
 
+func TestJsonSchemaOpenAPIMaxOutputBytes(t *testing.T) {
+	t.Parallel()
+
+	schemaBytes, err := os.ReadFile(schemaFile)
+	require.NoError(t, err)
+	schema, err := gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaBytes))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		toolType string
+		value    any
+		valid    bool
+	}{
+		{name: "omitted", toolType: "openapi", valid: true},
+		{name: "disabled", toolType: "openapi", value: 0, valid: true},
+		{name: "positive", toolType: "openapi", value: 1024, valid: true},
+		{name: "negative", toolType: "openapi", value: -1},
+		{name: "fractional", toolType: "openapi", value: 1.5},
+		{name: "string", toolType: "openapi", value: "1024"},
+		{name: "shell zero", toolType: "shell", value: 0},
+		{name: "fetch positive", toolType: "fetch", value: 1024},
+		{name: "missing type", value: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			toolset := map[string]any{}
+			if tt.toolType != "" {
+				toolset["type"] = tt.toolType
+			}
+			if tt.toolType == "openapi" {
+				toolset["url"] = "https://api.example.com/spec.yaml"
+			}
+			if tt.value != nil {
+				toolset["max_output_bytes"] = tt.value
+			}
+			configs := map[string]any{
+				"inline": map[string]any{
+					"agents": map[string]any{"root": map[string]any{"toolsets": []any{toolset}}},
+				},
+				"named": map[string]any{
+					"agents":   map[string]any{"root": map[string]any{"use_toolsets": []any{"api"}}},
+					"toolsets": map[string]any{"api": toolset},
+				},
+			}
+			for name, config := range configs {
+				data, err := json.Marshal(config)
+				require.NoError(t, err)
+				result, err := schema.Validate(gojsonschema.NewBytesLoader(data))
+				require.NoError(t, err)
+				assert.Equal(t, tt.valid, result.Valid(), "%s: %v", name, result.Errors())
+			}
+		})
+	}
+}
+
+func TestLoadOpenAPIMaxOutputBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		version string
+		field   string
+		value   *int
+		wantErr string
+	}{
+		{name: "latest omitted"},
+		{name: "legacy omitted", version: "15"},
+		{name: "disabled", field: "max_output_bytes: 0", value: new(0)},
+		{name: "positive", field: "max_output_bytes: 1024", value: new(1024)},
+		{name: "negative", field: "max_output_bytes: -1", wantErr: "max_output_bytes must not be negative"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			data := fmt.Appendf(nil, `agents:
+  root:
+    model: openai/gpt-4o
+    toolsets:
+      - type: openapi
+        url: https://api.example.com/spec.yaml
+        %s
+`, tt.field)
+			if tt.version != "" {
+				data = fmt.Appendf(data, "version: %q\n", tt.version)
+			}
+			cfg, err := Load(t.Context(), NewBytesSource("openapi.yaml", data))
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, cfg.Agents, 1)
+			require.Len(t, cfg.Agents[0].Toolsets, 1)
+			assert.Equal(t, tt.value, cfg.Agents[0].Toolsets[0].MaxOutputBytes)
+		})
+	}
+}
+
 // TestSchemaMatchesGoTypes verifies that every JSON-tagged field in the Go
 // config structs has a corresponding property in agent-schema.json (and
 // vice-versa). This prevents the schema from silently drifting out of sync

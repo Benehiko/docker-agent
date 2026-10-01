@@ -1692,6 +1692,9 @@ type Toolset struct {
 	// Defaults to 30 seconds when omitted.
 	Timeout int `json:"timeout,omitempty"`
 
+	// MaxOutputBytes caps OpenAPI text output in bytes; nil defaults to 30000, 0 disables the cutoff.
+	MaxOutputBytes *int `json:"max_output_bytes,omitempty" yaml:"max_output_bytes,omitempty"`
+
 	// EscapeHTML restores legacy HTML escaping in fetch's multi-URL JSON results.
 	// Defaults to false; single-URL results are unaffected.
 	EscapeHTML *bool `json:"escape_html,omitempty" yaml:"escape_html,omitempty"`

@@ -149,6 +149,10 @@ type Item struct {
 	// Evaluation tracks evaluator usage separately from the conversation.
 	Evaluation *Evaluation `json:"evaluation,omitempty"`
 
+	// RoutingDecision records a hook-driven control decision without storing
+	// the task text supplied to the selector.
+	RoutingDecision *RoutingDecision `json:"routing_decision,omitempty"`
+
 	// Termination holds a structured, non-error run stop marker (e.g. a
 	// budget ceiling) recorded by the evaluation pipeline. Storing it as an
 	// item keeps the stop's chronological position across reloads and
@@ -776,6 +780,7 @@ func (s *Session) snapshotItems() []Item {
 		}
 		items[i].Compaction = item.Compaction.Clone()
 		items[i].Evaluation = cloneEvaluation(item.Evaluation)
+		items[i].RoutingDecision = cloneRoutingDecision(item.RoutingDecision)
 	}
 	return items
 }

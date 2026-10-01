@@ -133,6 +133,9 @@ func (r *LocalRuntime) activateAgent(ctx context.Context, sess *session.Session,
 
 		result := r.dispatchControlHook(ctx, sess, a, hooks.EventBeforeAgentRun, route, "", events)
 		next, stop := r.resolveTransition(a, result, route)
+		if next == nil {
+			r.recordUnroutedDecision(sess, a, route, string(hooks.EventBeforeAgentRun), result, stop, events)
+		}
 		if stop != nil {
 			return a, stop
 		}
@@ -159,7 +162,11 @@ func (r *LocalRuntime) routeCompletion(ctx context.Context, sess *session.Sessio
 	if exec := r.hooksExec(a); exec != nil && exec.Has(hooks.EventAfterAgentComplete) {
 		result = r.dispatchControlHook(ctx, sess, a, hooks.EventAfterAgentComplete, route, content, events)
 		var stop *routeStop
-		if next, stop = r.resolveTransition(a, result, route); stop != nil {
+		next, stop = r.resolveTransition(a, result, route)
+		if next == nil {
+			r.recordUnroutedDecision(sess, a, route, phase, result, stop, events)
+		}
+		if stop != nil {
 			return routeStopped, stop
 		}
 	} else if forced := a.ForceHandoff(); forced != nil {
@@ -243,19 +250,59 @@ func (r *LocalRuntime) applyRoute(ctx context.Context, sess *session.Session, fr
 		Phase: phase, FromAgent: from.Name(), ToAgent: next.Name(),
 		AgentContext: newAgentContext(from.Name()),
 	}
-	if result != nil {
-		event.Evaluator = result.Metadata["evaluator"]
-		event.Selected = result.Metadata["evaluator_choice"]
-		event.Model = result.Metadata["evaluator_model"]
-		event.FallbackReason = result.Metadata["fallback_reason"]
-		if p, err := strconv.ParseFloat(result.Metadata["evaluator_probability"], 64); err == nil {
-			event.Probability = &p
-		}
+	action := hooks.TransitionActionRoute
+	if phase == agentSwitchKindForceHandoff {
+		action = agentSwitchKindForceHandoff
 	}
+	decision := r.recordRoutingDecision(sess, from.Name(), next.Name(), route, phase, action, "", result, events)
+	event.Evaluator, event.Selected, event.Model = decision.Evaluator, decision.Selected, decision.Model
+	event.Probability, event.FallbackReason = decision.Probability, decision.FallbackReason
 	events.Emit(event)
 	if event.FallbackReason != "" {
 		events.Emit(Warning(fmt.Sprintf("Routing fell back to %q (%s).", next.Name(), event.FallbackReason), from.Name()))
 	}
+}
+
+// Routing decision actions beyond route and force_handoff.
+const (
+	routingActionNone    = "none"
+	routingActionBlocked = "blocked"
+)
+
+// recordRoutingDecision stores the decision as a session item, so it survives
+// reloads and exports. toAgent is empty when no route was taken.
+func (r *LocalRuntime) recordRoutingDecision(sess *session.Session, fromAgent, toAgent string, route *routeState, phase, action, reason string, result *hooks.Result, events EventSink) *session.RoutingDecision {
+	decision := &session.RoutingDecision{
+		ID: uuid.NewV4().String(), InvocationID: route.invocationID, StepID: route.stepID(),
+		Phase: phase, FromAgent: fromAgent, ToAgent: toAgent, Action: action, Reason: reason, CreatedAt: r.now(),
+	}
+	if result != nil {
+		decision.Evaluator = result.Metadata["evaluator"]
+		decision.Selected = result.Metadata["evaluator_choice"]
+		decision.Model = result.Metadata["evaluator_model"]
+		decision.FallbackReason = result.Metadata["fallback_reason"]
+		if p, err := strconv.ParseFloat(result.Metadata["evaluator_probability"], 64); err == nil {
+			decision.Probability = &p
+		}
+	}
+	sess.AddRoutingDecision(decision)
+	events.Emit(&RoutingDecisionEvent{
+		Type: "routing_decision", SessionID: sess.ID, Decision: decision,
+		AgentContext: newAgentContext(fromAgent),
+	})
+	return decision
+}
+
+// recordUnroutedDecision records a control hook that ran but did not change the agent.
+func (r *LocalRuntime) recordUnroutedDecision(sess *session.Session, a *agent.Agent, route *routeState, phase string, result *hooks.Result, stop *routeStop, events EventSink) {
+	if result == nil {
+		return
+	}
+	action, reason := routingActionNone, ""
+	if stop != nil {
+		action, reason = routingActionBlocked, stop.message
+	}
+	r.recordRoutingDecision(sess, a.Name(), "", route, phase, action, reason, result, events)
 }
 
 // switchSessionAgent makes name the active agent. Routed sessions switch only
@@ -317,3 +364,15 @@ type AgentRouteEvent struct {
 }
 
 func (e *AgentRouteEvent) GetSessionID() string { return e.SessionID }
+
+// RoutingDecisionEvent reports a persisted control decision, including those
+// that left the active agent unchanged.
+type RoutingDecisionEvent struct {
+	AgentContext
+
+	Type      string                   `json:"type"`
+	SessionID string                   `json:"session_id"`
+	Decision  *session.RoutingDecision `json:"decision"`
+}
+
+func (e *RoutingDecisionEvent) GetSessionID() string { return e.SessionID }

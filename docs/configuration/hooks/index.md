@@ -1402,6 +1402,30 @@ Route events (`agent_route`) carry the invocation and step IDs, source and
 destination agents, evaluator, selected outcome, probability, returned model and any
 fallback reason. The TUI shows a one-line notice per route.
 
+### Decision records
+
+Every control-hook decision is stored in the session as a `routing_decision` item,
+in transcript order, and emitted as a `routing_decision` event. Records survive
+reloads, branching, forking and session export, and are idempotent per decision ID.
+They are audit data: they never enter the model's context and carry no cost.
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `invocation_id`, `step_id` | Unique decision ID, the user request it belongs to, and its step. |
+| `phase` | `before_agent_run`, `after_agent_complete` or `force_handoff`. |
+| `from_agent`, `to_agent` | The deciding agent and the destination (empty when no route was taken). |
+| `action` | `route`, `force_handoff`, `none` (the hook let the agent run or finish) or `blocked`. |
+| `evaluator`, `selected`, `probability`, `model` | Evaluator selectors only: the evaluator, chosen outcome, its probability and the model that answered. |
+| `fallback_reason` | Why the default agent was used (`tie`, `below_threshold`, `evaluator_failed`, ...). |
+| `reason` | The block reason, for `blocked` decisions. |
+| `created_at` | When the decision was made. |
+
+Records never contain the request, the agent's output or the conversation. A
+`blocked` reason is the message your hook returned, so keep it free of task text.
+In exported JSON they appear as `{"routing_decision": {...}}` entries in `messages`.
+
+The TUI shows a one-line notice per route.
+
 ## Skill content guard
 
 `skill_content_guard` checks raw skill text before embedded commands expand or

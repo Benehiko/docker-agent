@@ -288,7 +288,6 @@ retrying a run could repeat tool side effects. A stream ending without a root
 `stream_stopped` event reports an incomplete-response error. Streaming requests
 are not subject to the metadata client's 30-second total timeout.
 
-
 `GET /api/sessions/:id/events` is a **Server-Sent Events** stream of the
 session's runtime events — `stream_started`, `agent_choice`, `tool_call`,
 `session_title`, `token_usage`, `stream_stopped`, and so on. Unlike the

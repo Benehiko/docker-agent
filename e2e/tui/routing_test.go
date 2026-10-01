@@ -105,3 +105,45 @@ func TestRouting_ToolApprovalStillAppliesToRoutedAgents(t *testing.T) {
 	d.Assert(tuitest.Absent("Action completed."))
 	d.Type("y").WaitFor(tuitest.Contains("Action completed."))
 }
+
+type fixedReviewJudge struct{ calls atomic.Int32 }
+
+func (j *fixedReviewJudge) Evaluate(context.Context, any) (*evaluator.Result, error) {
+	j.calls.Add(1)
+	return &evaluator.Result{
+		Type: "choice", Model: "judge-1", Choice: "review",
+		Probabilities: map[string]float64{"review": 0.95, "ready": 0.05},
+		Usage:         evaluator.Usage{InputTokens: 3},
+	}, nil
+}
+
+// A finished draft continues to the reviewer inside the native TUI, and both
+// answers end up in the transcript.
+func TestRouting_CompletionContinuesToReviewer(t *testing.T) {
+	isolateState(t)
+
+	judge := &fixedReviewJudge{}
+	drafter := agent.New("drafter", "Draft an answer.", agent.WithDescription("Drafts"),
+		agent.WithModel(&scriptedProvider{id: "test/drafter", contextSize: 10000, scripts: [][]chat.MessageStreamResponse{contentScript("Draft answer.", 10, 5)}}),
+		agent.WithRouting(agent.Routing{AllowedAgents: []string{"reviewer"}, DefaultAgent: "reviewer"}),
+		agent.WithHooks(&latest.HooksConfig{AfterAgentComplete: latest.HookDefinitions{{
+			Type: "evaluator", Evaluator: "answer_review",
+			RoutingPolicy: &latest.RoutingPolicy{Routes: map[string]string{"review": "reviewer", "ready": "reviewer"}, MinProbability: 0.85},
+		}}}))
+	reviewer := agent.New("reviewer", "Review the draft.", agent.WithDescription("Reviews"),
+		agent.WithModel(&scriptedProvider{id: "test/reviewer", contextSize: 10000, scripts: [][]chat.MessageStreamResponse{contentScript("Reviewed answer.", 10, 5)}}))
+
+	rt, err := runtime.New(t.Context(), team.New(team.WithAgents(drafter, reviewer),
+		team.WithEvaluators(map[string]evaluator.Evaluator{"answer_review": judge})),
+		runtime.WithCurrentAgent("drafter"), runtime.WithSessionCompaction(false), runtime.WithModelStore(stubModelStore{}))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rt.Close() })
+	wd, _ := os.Getwd()
+	application := app.New(t.Context(), rt, session.New(session.WithSafetyPolicy(session.SafetyPolicyBalanced)))
+	d := tuitest.New(t, tui.New(t.Context(), nil, application, wd, func() {}), 120, 40)
+
+	d.Type("Write something").Enter().WaitFor(tuitest.Contains("Reviewed answer."))
+
+	d.Assert(tuitest.Contains("Draft answer."))
+	assert.EqualValues(t, 1, judge.calls.Load(), "the completion selector runs once")
+}

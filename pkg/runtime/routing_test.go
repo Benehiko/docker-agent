@@ -27,9 +27,11 @@ import (
 // scriptedProvider answers every call with a fixed reply and counts calls.
 type scriptedProvider struct {
 	reply string
-	calls atomic.Int32
-	mu    sync.Mutex
-	seen  [][]chat.Message
+	// stream, when set, replaces reply for every call (e.g. a structured-output tool call).
+	stream func() chat.MessageStream
+	calls  atomic.Int32
+	mu     sync.Mutex
+	seen   [][]chat.Message
 }
 
 func (p *scriptedProvider) ID() modelsdev.ID { return modelsdev.ParseIDOrZero("test/mock-model") }
@@ -39,6 +41,9 @@ func (p *scriptedProvider) CreateChatCompletionStream(_ context.Context, msgs []
 	p.mu.Lock()
 	p.seen = append(p.seen, slices.Clone(msgs))
 	p.mu.Unlock()
+	if p.stream != nil {
+		return p.stream(), nil
+	}
 	return newStreamBuilder().AddContent(p.reply).AddStopWithUsage(1, 1).Build(), nil
 }
 
@@ -123,6 +128,12 @@ func evaluatorRoutingHooks(event string, minProbability float64) *latest.HooksCo
 
 func newEvaluatorRoutingFixture(t *testing.T, answers ...scriptedAnswer) *routingFixture {
 	t.Helper()
+	return newRoutingFixtureFor(t, latest.EventBeforeAgentRun, nil, answers...)
+}
+
+// newRoutingFixtureFor wires root's evaluator selector on the given control event.
+func newRoutingFixtureFor(t *testing.T, event string, opts []Opt, answers ...scriptedAnswer) *routingFixture {
+	t.Helper()
 	f := &routingFixture{
 		router:    &scriptedProvider{reply: "router must not answer"},
 		providers: map[string]*scriptedProvider{},
@@ -135,10 +146,10 @@ func newEvaluatorRoutingFixture(t *testing.T, answers ...scriptedAnswer) *routin
 	}
 	root := agent.New("root", "root instructions", agent.WithModel(f.router),
 		agent.WithRouting(agent.Routing{AllowedAgents: []string{"quick", "specialist", "clarifier"}, DefaultAgent: "clarifier"}),
-		agent.WithHooks(evaluatorRoutingHooks(latest.EventBeforeAgentRun, 0.85)))
+		agent.WithHooks(evaluatorRoutingHooks(event, 0.85)))
 	tm := team.New(team.WithAgents(append([]*agent.Agent{root}, agents...)...),
 		team.WithEvaluators(map[string]evaluator.Evaluator{"task_route": f.eval}))
-	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), tm, append([]Opt{WithSessionCompaction(false), WithModelStore(mockModelStore{})}, opts...)...)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, rt.Close()) })
 	f.rt = rt

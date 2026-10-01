@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"uuid"
 
 	"github.com/dop251/goja"
 	"go.opentelemetry.io/otel/attribute"
@@ -227,12 +228,20 @@ func invokeTool(ctx context.Context, rt tools.Runtime, tool tools.Tool, args map
 		return "", filtered, err
 	}
 
-	result, err := tool.Handler(ctx, tools.ToolCall{
+	toolCall := tools.ToolCall{
+		ID:   "codemode_" + uuid.NewV4().String(),
+		Type: "function",
 		Function: tools.FunctionCall{
 			Name:      tool.Name,
 			Arguments: string(arguments),
 		},
-	}, rt)
+	}
+	var result *tools.ToolCallResult
+	if runner, ok := rt.(tools.ToolRunner); ok {
+		result, err = runner.RunTool(ctx, toolCall, tool)
+	} else {
+		result, err = tool.Handler(ctx, toolCall, rt)
+	}
 	if err != nil {
 		return "", filtered, err
 	}

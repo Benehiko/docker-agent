@@ -1868,3 +1868,47 @@ func TestAppendAssistantMediaEmptyIsNoOp(t *testing.T) {
 	assert.Nil(t, m.AppendAssistantMedia("root", nil))
 	assert.Equal(t, 1, m.MessageTypeCount(types.MessageTypeSpinner), "empty media must not disturb the pending spinner")
 }
+
+func TestNestedToolResultsKeepInvocationOrder(t *testing.T) {
+	t.Parallel()
+	for _, reasoning := range []bool{false, true} {
+		name := "standalone"
+		if reasoning {
+			name = "reasoning"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := NewScrollableView(animation.NewRuntime(), 120, 40, &service.SessionState{}).(*model)
+			if reasoning {
+				m.AppendReasoning("root", "Planning tools")
+			}
+			for _, name := range []string{"javascript_parent", "inner_first", "inner_second"} {
+				m.AddOrUpdateToolCall("root", tools.ToolCall{ID: name, Function: tools.FunctionCall{Name: name, Arguments: `{"value":"test"}`}}, tools.Tool{Name: name}, types.ToolStatusRunning)
+			}
+			assertOrder := func() {
+				t.Helper()
+				var parts []string
+				for _, view := range m.views {
+					if block, ok := view.(*reasoningblock.Model); ok {
+						block.SetExpanded(true)
+					}
+					parts = append(parts, ansi.Strip(view.View()))
+				}
+				text := strings.Join(parts, "\n")
+				parent := strings.Index(text, "javascript_parent")
+				first := strings.Index(text, "inner_first")
+				second := strings.Index(text, "inner_second")
+				require.NotEqual(t, -1, parent)
+				require.NotEqual(t, -1, first)
+				require.NotEqual(t, -1, second)
+				assert.Less(t, parent, first)
+				assert.Less(t, first, second)
+			}
+			assertOrder()
+			for _, name := range []string{"inner_second", "inner_first", "javascript_parent"} {
+				m.AddToolResult(&runtime.ToolCallResponseEvent{ToolCallID: name, Response: "done", Result: tools.ResultSuccess("done")}, types.ToolStatusCompleted)
+				assertOrder()
+			}
+		})
+	}
+}

@@ -141,6 +141,34 @@ func (t *ToolTracker) Finish(id string, result ToolResult) *ToolView {
 	return snapshot
 }
 
+func (t *ToolTracker) Complete(id string, result ToolResult) {
+	order := slices.Clone(t.order)
+	if !slices.Contains(order, id) {
+		order = append(order, id)
+	}
+	view := t.Finish(id, result)
+	if view == nil {
+		return
+	}
+	t.byID[id] = view
+	t.order = order
+}
+
+// DrainCompleted commits only the completed prefix, preserving invocation order.
+func (t *ToolTracker) DrainCompleted() []*ToolView {
+	var views []*ToolView
+	for len(t.order) > 0 {
+		id := t.order[0]
+		view := t.byID[id]
+		if view == nil || view.message == nil || view.message.ToolStatus != tuitypes.ToolStatusCompleted && view.message.ToolStatus != tuitypes.ToolStatusError {
+			break
+		}
+		views = append(views, view)
+		t.Remove(id)
+	}
+	return views
+}
+
 // FinalizeAll marks every in-flight tool with a terminal status, returns
 // immutable snapshots in call order, and clears the tracker.
 func (t *ToolTracker) FinalizeAll(status tuitypes.ToolStatus) []*ToolView {
@@ -149,8 +177,10 @@ func (t *ToolTracker) FinalizeAll(status tuitypes.ToolStatus) []*ToolView {
 		if tv.message == nil {
 			return
 		}
-		tv.message.ToolStatus = status
-		if status == tuitypes.ToolStatusError && tv.message.Content == "" {
+		if tv.message.ToolStatus == tuitypes.ToolStatusPending || tv.message.ToolStatus == tuitypes.ToolStatusRunning {
+			tv.message.ToolStatus = status
+		}
+		if tv.message.ToolStatus == tuitypes.ToolStatusError && tv.message.Content == "" {
 			tv.message.Content = "Tool call ended before a result was received."
 		}
 		msg := *tv.message

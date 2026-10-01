@@ -334,8 +334,29 @@ agents:
 	_, err := s.send("run", c.emit)
 	require.NoError(t, err)
 	assert.Equal(t, 1, echo.callCount())
-	require.Len(t, c.find("tool_result"), 1)
-	assert.Contains(t, c.find("tool_result")[0]["output"], `"value":"echo: ping!"`)
+	calls := c.find("tool_call")
+	require.Len(t, calls, 2)
+	assert.Equal(t, "run_tools_with_javascript", calls[0]["name"])
+	assert.Equal(t, "call-1", calls[0]["id"])
+	assert.Equal(t, "echo", calls[1]["name"])
+	assert.JSONEq(t, `{"text":"ping"}`, calls[1]["args"].(string))
+	assert.NotEmpty(t, calls[1]["id"])
+	assert.NotEqual(t, calls[0]["id"], calls[1]["id"])
+
+	results := c.find("tool_result")
+	require.Len(t, results, 2)
+	assert.Equal(t, calls[1]["id"], results[0]["id"])
+	assert.Equal(t, "echo", results[0]["name"])
+	assert.Equal(t, "echo: ping", results[0]["output"])
+	assert.Equal(t, false, results[0]["is_error"])
+	assert.Equal(t, calls[0]["id"], results[1]["id"])
+	assert.Equal(t, "run_tools_with_javascript", results[1]["name"])
+	assert.Contains(t, results[1]["output"], `"value":"echo: ping!"`)
+	assert.Equal(t, false, results[1]["is_error"])
+
+	messages := model.lastCall()
+	require.Equal(t, chat.MessageRoleTool, messages[len(messages)-1].Role)
+	assert.Equal(t, "call-1", messages[len(messages)-1].ToolCallID)
 }
 
 func TestDeferredToolsActivateOnDemand(t *testing.T) {

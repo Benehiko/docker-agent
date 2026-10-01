@@ -42,6 +42,7 @@ type rootFlags struct {
 const (
 	envConfigDir       = "DOCKER_AGENT_CONFIG_DIR"
 	cagentEnvConfigDir = "CAGENT_CONFIG_DIR"
+	envDataDir         = "DOCKER_AGENT_DATA_DIR"
 )
 
 // resolveConfigDir picks the config directory override with flag > env >
@@ -50,6 +51,10 @@ const (
 // its argv.
 func resolveConfigDir(flagValue string) string {
 	return cmp.Or(flagValue, os.Getenv(envConfigDir), os.Getenv(cagentEnvConfigDir))
+}
+
+func resolveDataDir(flagValue string) string {
+	return cmp.Or(flagValue, os.Getenv(envDataDir))
 }
 
 func NewRootCmd() *cobra.Command {
@@ -72,7 +77,7 @@ New to docker agent? Take the hands-on tour: docker agent getting-started`,
 			if dir := resolveConfigDir(flags.configDir); dir != "" {
 				paths.SetConfigDir(dir)
 			}
-			if dir := flags.dataDir; dir != "" {
+			if dir := resolveDataDir(flags.dataDir); dir != "" {
 				paths.SetDataDir(dir)
 			}
 
@@ -164,7 +169,7 @@ We collect anonymous usage data to help improve docker agent. To disable:
 	cmd.PersistentFlags().StringVar(&flags.logFilePath, "log-file", "", "Path to debug log file (default: ~/.cagent/cagent.debug.log; only used with --debug)")
 	cmd.PersistentFlags().StringVar(&flags.cacheDir, "cache-dir", "", "Override the cache directory (default: ~/Library/Caches/cagent on macOS)")
 	cmd.PersistentFlags().StringVar(&flags.configDir, "config-dir", "", "Override the config directory (default: ~/.config/cagent)")
-	cmd.PersistentFlags().StringVar(&flags.dataDir, "data-dir", "", "Override the data directory (default: ~/.cagent)")
+	cmd.PersistentFlags().StringVar(&flags.dataDir, "data-dir", "", "Override the data directory (default: ~/.cagent; env: DOCKER_AGENT_DATA_DIR)")
 
 	// Define groups
 	cmd.AddGroup(

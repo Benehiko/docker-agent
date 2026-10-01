@@ -838,7 +838,7 @@ These flags are available on every `docker agent` command:
 | `-o, --otel`              | Enable OpenTelemetry observability: traces, metrics, and logs. Requires `OTEL_EXPORTER_OTLP_ENDPOINT` to export to a collector. |
 | `--cache-dir <path>`      | Override the cache directory (default: `~/Library/Caches/cagent` on macOS)             |
 | `--config-dir <path>`     | Override the config directory (default: `~/.config/cagent`). Also reads `DOCKER_AGENT_CONFIG_DIR` (legacy `CAGENT_CONFIG_DIR`) env var. |
-| `--data-dir <path>`       | Override the data directory (default: `~/.cagent`; holds `session.db`, prompt `history`, worktrees, plans, …)            |
+| `--data-dir <path>`       | Override the data directory (default: `~/.cagent`; holds `session.db`, prompt `history`, worktrees, plans, …). Also reads `DOCKER_AGENT_DATA_DIR`; the flag takes precedence.            |
 | `--help`                  | Show help for any command                                                              |
 
 ### OpenTelemetry environment variables

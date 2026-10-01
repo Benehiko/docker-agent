@@ -63,24 +63,39 @@ func (p *chatPage) handleMessageAdded(msg *runtime.MessageAddedEvent) tea.Cmd {
 	if p.streamCancelled || msg.Message.Message.Role != chat.MessageRoleAssistant {
 		return nil
 	}
-	if !p.app.CanResolveGeneratedFiles() {
+	if msg.Message.Implicit {
 		return nil
 	}
-	placeholders, requests := generatedImageMedia(msg.Message.Message.MultiContent)
-	if len(placeholders) == 0 {
-		return nil
+	sessionID := p.contentSession(msg.SessionID)
+	identity := p.contentIdentity.Resolve(sessionID, msg.Message.Message.MessageID)
+	if msg.Message.Message.Content != "" {
+		defer p.contentIdentity.Finish(sessionID)
 	}
-
-	p.trackContentSession(msg.SessionID)
-	p.hasReceivedAssistantContent = true
-	p.setPendingResponse(false)
 	agentName := msg.Message.AgentName
 	if agentName == "" {
 		agentName = msg.AgentName
 	}
+	content := msg.Message.Message.Content
+	var contentCmd tea.Cmd
+	if content != "" {
+		contentCmd = p.messages.ReconcileAssistantContent(identity.SessionID, identity.MessageID, agentName, content)
+		p.hasReceivedAssistantContent = true
+		p.setPendingResponse(false)
+	}
+	if !p.app.CanResolveGeneratedFiles() {
+		return contentCmd
+	}
+	placeholders, requests := generatedImageMedia(msg.Message.Message.MultiContent)
+	if len(placeholders) == 0 {
+		return contentCmd
+	}
+	p.trackContentSession(msg.SessionID)
+	p.hasReceivedAssistantContent = true
+	p.setPendingResponse(false)
 	return tea.Batch(
+		contentCmd,
 		p.sidebar.SetAgentActivity(agentName),
-		p.messages.AppendAssistantMedia(agentName, placeholders),
+		p.messages.AppendAssistantMediaContent(identity.SessionID, identity.MessageID, agentName, placeholders),
 		p.resolveGeneratedMediaCmd(requests),
 	)
 }

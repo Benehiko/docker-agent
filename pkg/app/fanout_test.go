@@ -34,7 +34,7 @@ func TestFanOut_TurnBoundaryEventEvictsPendingDelta(t *testing.T) {
 		// A one-slot subscriber makes the overflow deterministic. The subscriber
 		// never reads, standing in for a consumer that fell behind.
 		ch := make(chan tea.Msg, 1)
-		app.addSubscriber(ch)
+		app.addSubscriber(&eventSubscriber{ch: ch})
 		app.fanoutOnce.Do(app.startFanOut)
 
 		// Fill the subscriber's buffer with a droppable event.
@@ -75,11 +75,11 @@ func TestFanOut_DroppableEventIsDroppedOnOverflow(t *testing.T) {
 		}
 
 		ch := make(chan tea.Msg, 1)
-		app.addSubscriber(ch)
+		app.addSubscriber(&eventSubscriber{ch: ch})
 		// The witness is registered after ch, so once a message reaches it the
 		// fan-out has already made its keep-or-drop decision for ch.
 		witness := make(chan tea.Msg, 16)
-		app.addSubscriber(witness)
+		app.addSubscriber(&eventSubscriber{ch: witness})
 		app.fanoutOnce.Do(app.startFanOut)
 
 		first := runtime.NewTokenUsageEvent("sess", "root", &runtime.Usage{})

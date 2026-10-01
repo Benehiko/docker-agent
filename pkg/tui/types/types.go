@@ -79,6 +79,8 @@ type AssistantMedia struct {
 
 // Message represents a single message in the chat
 type Message struct {
+	SessionID      string
+	MessageID      string
 	Type           MessageType
 	Content        string
 	Sender         string                // Agent name for assistant messages

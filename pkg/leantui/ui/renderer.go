@@ -91,6 +91,11 @@ func (r *Renderer) Frame(newLines []string, cursorLine, cursorCol int) {
 	// Changes to a live block may start above the viewport. Repaint only the
 	// visible rows rather than clearing terminal scrollback on every update.
 	if first < r.viewportTop || newViewportTop < r.viewportTop {
+		if first < newViewportTop {
+			// Scrollback cannot be edited; replay the changed suffix without erasing history.
+			r.redrawSuffix(newLines, first, cursorLine, cursorCol)
+			return
+		}
 		r.repaintVisible(newLines, cursorLine, cursorCol)
 		return
 	}
@@ -171,6 +176,27 @@ func (r *Renderer) repaintVisible(newLines []string, cursorLine, cursorCol int) 
 	b.WriteString(seqSyncEnd)
 	r.write(b.String())
 	r.cursorRow = cur
+	r.prev = newLines
+}
+
+// redrawSuffix emits changed offscreen rows before they become immutable scrollback.
+func (r *Renderer) redrawSuffix(newLines []string, first, cursorLine, cursorCol int) {
+	var b strings.Builder
+	b.WriteString(seqSyncStart)
+	b.WriteString(seqHideCursor)
+	b.WriteString("\x1b[2J\x1b[H")
+	for i, line := range newLines[first:] {
+		if i > 0 {
+			b.WriteString("\r\n")
+		}
+		b.WriteString(seqEraseLine)
+		b.WriteString(line)
+	}
+	r.viewportTop = max(0, len(newLines)-r.height)
+	r.cursorRow = r.moveCursor(&b, len(newLines)-1, cursorLine, cursorCol)
+	b.WriteString(seqShowCursor)
+	b.WriteString(seqSyncEnd)
+	r.write(b.String())
 	r.prev = newLines
 }
 

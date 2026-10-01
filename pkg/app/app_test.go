@@ -238,6 +238,7 @@ func TestApp_Retry_SuppressesReEmittedUserMessage(t *testing.T) {
 		for !sawStreamStopped {
 			select {
 			case ev := <-events:
+				ev = unwrappedTestEvent(ev)
 				switch e := ev.(type) {
 				case *runtime.UserMessageEvent:
 					userMessages = append(userMessages, e.Message)
@@ -297,6 +298,7 @@ func TestApp_Start_ForwardsBackgroundEvents(t *testing.T) {
 
 		select {
 		case msg := <-events:
+			msg = unwrappedTestEvent(msg)
 			assert.Equal(t, usage, msg, "the background event must reach the app's event stream unchanged")
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for the forwarded background event")
@@ -362,6 +364,7 @@ func TestApp_Start_ForwardsElicitationRequests(t *testing.T) {
 
 		select {
 		case msg := <-events:
+			msg = unwrappedTestEvent(msg)
 			assert.Equal(t, ev, msg, "the elicitation request must reach the app's event stream unchanged")
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for the forwarded elicitation request")
@@ -566,6 +569,7 @@ func TestApp_UpdateSessionTitle(t *testing.T) {
 		// Check that an event was emitted
 		select {
 		case event := <-events:
+			event = unwrappedTestEvent(event)
 			titleEvent, ok := event.(*runtime.SessionTitleEvent)
 			require.True(t, ok, "should emit SessionTitleEvent")
 			assert.Equal(t, "New Title", titleEvent.Title)
@@ -719,6 +723,7 @@ func TestApp_SubscribeWith_FanOutToMultipleSubscribers(t *testing.T) {
 		for _, ch := range []chan tea.Msg{a, b} {
 			select {
 			case msg := <-ch:
+				msg = unwrappedTestEvent(msg)
 				ev, ok := msg.(*runtime.SessionTitleEvent)
 				require.True(t, ok)
 				assert.Equal(t, "hello", ev.Title)
@@ -805,6 +810,7 @@ func TestApp_InjectUserMessage(t *testing.T) {
 
 	select {
 	case msg := <-events:
+		msg = unwrappedTestEvent(msg)
 		sendMsg, ok := msg.(messages.SendMsg)
 		require.True(t, ok, "should emit a SendMsg, got %T", msg)
 		assert.Equal(t, "do the thing", sendMsg.Content)
@@ -999,6 +1005,7 @@ func TestApp_CompactLiveSession_BridgesEventsIntoStream(t *testing.T) {
 
 		select {
 		case msg := <-app.events:
+			msg = unwrappedTestEvent(msg)
 			evt, ok := msg.(*runtime.SessionCompactionEvent)
 			require.True(t, ok, "expected SessionCompactionEvent, got %T", msg)
 			assert.Equal(t, "child-1", evt.SessionID)
@@ -1096,6 +1103,7 @@ func countElicitationDeliveries(t *testing.T, events <-chan tea.Msg) int {
 	for {
 		select {
 		case msg := <-events:
+			msg = unwrappedTestEvent(msg)
 			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
 				n++
 			}
@@ -1310,6 +1318,7 @@ func collectUntilQuiet(t *testing.T, events <-chan tea.Msg) []tea.Msg {
 	for {
 		select {
 		case msg := <-events:
+			msg = unwrappedTestEvent(msg)
 			collected = append(collected, msg)
 		case <-time.After(collectUntilQuietWindow):
 			return collected
@@ -1485,4 +1494,11 @@ func TestForwardRunStreamEvents_SynthesizesRootStreamStopped(t *testing.T) {
 
 func (m *mockRuntime) ReadSkillContent(context.Context, *session.Session, string) (string, error) {
 	return "", nil
+}
+
+func unwrappedTestEvent(msg tea.Msg) tea.Msg {
+	if event, ok := msg.(generationEvent); ok {
+		return event.inner
+	}
+	return msg
 }

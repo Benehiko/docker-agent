@@ -30,6 +30,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/dialog"
 	msgtypes "github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
+	"github.com/docker/docker-agent/pkg/tui/streamcontent"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -232,6 +233,7 @@ type chatPage struct {
 	agentStack       []string // agent per active stream level; len(agentStack)==streamDepth
 	streamStartTime  time.Time
 	contentSessionID string
+	contentIdentity  streamcontent.Tracker
 
 	// routingID is the tab identity this page's routed UI timers are
 	// addressed to; empty for standalone pages (timers then fire unrouted,

@@ -148,3 +148,46 @@ func TestRendererEraseBelow(t *testing.T) {
 	assert.Contains(t, out, seqShowCursor)
 	assert.Equal(t, 2, r.cursorRow)
 }
+
+func TestRendererOffscreenInsertionWritesEntireChangedSuffix(t *testing.T) {
+	t.Parallel()
+	r, buf := newTestRenderer(3)
+	r.Frame([]string{"old-header", "history", "old-tail", "input", "footer"}, 3, 0)
+	buf.Reset()
+	lines := []string{"new-header", "FINAL-ANSWER", "new-line-1", "new-line-2", "new-line-3", "new-tail", "input", "footer"}
+	r.Frame(lines, 6, 0)
+	assert.Contains(t, buf.String(), "FINAL-ANSWER")
+	assert.Contains(t, buf.String(), "new-line-1")
+	assert.Contains(t, buf.String(), "new-tail")
+	assert.NotContains(t, buf.String(), "\x1b[3J", "immutable terminal history must not be erased")
+	assert.Equal(t, 5, r.ViewportTop())
+	buf.Reset()
+	r.Frame(lines, 6, 0)
+	assert.NotContains(t, buf.String(), "FINAL-ANSWER", "identical frames must not duplicate content")
+}
+
+func TestRendererLongAppendWritesAllNewRowsWithoutRedraw(t *testing.T) {
+	t.Parallel()
+	r, buf := newTestRenderer(3)
+	r.Frame([]string{"history", "old-tail", "input", "footer"}, 2, 0)
+	buf.Reset()
+	r.Frame([]string{"history", "old-tail", "FINAL-ANSWER", "line2", "line3", "line4", "input", "footer"}, 6, 0)
+	assert.Contains(t, buf.String(), "FINAL-ANSWER")
+	assert.Contains(t, buf.String(), "line2")
+	assert.NotContains(t, buf.String(), "\x1b[2J")
+	assert.NotContains(t, buf.String(), "\x1b[3J")
+}
+
+func TestRendererOffscreenCanonicalCorrectionWithoutGrowthIsWritten(t *testing.T) {
+	t.Parallel()
+	r, buf := newTestRenderer(3)
+	r.Frame([]string{"ANSWER", "tool1", "tool2", "tool3", "input", "footer"}, 4, 0)
+	buf.Reset()
+	r.Frame([]string{"FINAL-ANSWER", "tool1", "tool2", "tool3", "input", "footer"}, 4, 0)
+	assert.Contains(t, buf.String(), "FINAL-ANSWER")
+	assert.NotContains(t, buf.String(), "\x1b[3J")
+	buf.Reset()
+	r.Frame([]string{"SHORT-FINAL-ANSWER", "tool1", "tool2", "input", "footer"}, 3, 0)
+	assert.Contains(t, buf.String(), "SHORT-FINAL-ANSWER")
+	assert.NotContains(t, buf.String(), "\x1b[3J")
+}

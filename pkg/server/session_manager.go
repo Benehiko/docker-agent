@@ -1415,6 +1415,7 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	}
 	rt.modelSwitch.Unlock()
 
+	sm.ensureEventLog(sessionID)
 	_, skipMirroredElicitation := rt.runtime.(elicitationSinkMirror)
 	go func() {
 		defer rt.streaming.Unlock()
@@ -1428,9 +1429,7 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 			if _, isElicitation := event.(*runtime.ElicitationRequestEvent); isElicitation && skipMirroredElicitation {
 				continue
 			}
-			if pe, ok := sm.eventLogs.Load(sessionID); ok {
-				pe.log.append(event)
-			}
+			sm.appendSessionEvent(sessionID, event)
 		}
 		if err := sm.persistActiveSession(context.WithoutCancel(ctx), sessionID, rt, sess); err != nil && !errors.Is(err, ErrSessionNotRunning) {
 			slog.WarnContext(ctx, "Failed to persist recalled session", "session_id", sessionID, "error", err)

@@ -80,6 +80,12 @@ func (r *mediaRecordingMessages) AppendAssistantMedia(agentName string, media []
 	return r.Model.AppendAssistantMedia(agentName, media)
 }
 
+func (r *mediaRecordingMessages) AppendAssistantMediaContent(sessionID, messageID, agentName string, media []types.AssistantMedia) tea.Cmd {
+	r.mediaAgents = append(r.mediaAgents, agentName)
+	r.mediaCalls = append(r.mediaCalls, media)
+	return r.Model.AppendAssistantMediaContent(sessionID, messageID, agentName, media)
+}
+
 func (r *mediaRecordingMessages) UpdateAssistantMedia(media []types.AssistantMedia) tea.Cmd {
 	r.mediaUpdates = append(r.mediaUpdates, media)
 	return r.Model.UpdateAssistantMedia(media)

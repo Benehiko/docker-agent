@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,140 @@ type RemoteRuntime struct {
 	// field read when no specific agent has been selected.
 	resolvedDefault   string
 	resolvedDefaultMu sync.Mutex
+
+	stateMu sync.Mutex // sessionID and pendingOAuthElicitation
+
+	reconcileMu       sync.RWMutex // snapshots must not race foreground delivery
+	backgroundInit    sync.Mutex
+	backgroundMu      sync.Mutex
+	backgroundHandler func(Event)
+	background        *remoteEventSubscription
+	closed            bool
+}
+
+// Cursor-based subscriptions are optional so other RemoteClient implementations
+// do not accidentally replay foreground history through the background sink.
+type remoteEventClient interface {
+	GetSessionSnapshot(ctx context.Context, sessionID string) (*api.SessionSnapshotResponse, error)
+	StreamSessionEventsSince(ctx context.Context, sessionID string, since uint64) (<-chan Event, error)
+}
+
+type remoteEventSubscription struct {
+	cancel    context.CancelFunc
+	sessionID string
+	history   *remoteMessageHistory
+}
+
+// Snapshots flatten sub-sessions; recovery exposes only plain assistant text.
+type remoteMessageHistory struct {
+	mu           sync.Mutex
+	content      map[string]*strings.Builder
+	sessions     map[string]string
+	complete     map[string]bool
+	elicitations map[string]bool
+	unidentified bool
+}
+
+func newRemoteMessageHistory(messages []session.Message) *remoteMessageHistory {
+	h := &remoteMessageHistory{
+		content:      make(map[string]*strings.Builder),
+		sessions:     make(map[string]string),
+		complete:     make(map[string]bool),
+		elicitations: make(map[string]bool),
+	}
+	for _, msg := range messages {
+		if msg.Message.Role != chat.MessageRoleAssistant {
+			continue
+		}
+		if msg.Message.MessageID == "" && recoverableAssistantText(msg) {
+			h.unidentified = true
+		}
+		content := new(strings.Builder)
+		content.WriteString(msg.Message.Content)
+		h.content[msg.Message.MessageID] = content
+		h.complete[msg.Message.MessageID] = true
+	}
+	return h
+}
+
+func recoverableAssistantText(msg session.Message) bool {
+	return !msg.Implicit && msg.Message.Role == chat.MessageRoleAssistant && msg.Message.Content != "" &&
+		len(msg.Message.ToolCalls) == 0 && msg.Message.FunctionCall == nil
+}
+
+func (h *remoteMessageHistory) deliver(event Event, send func(Event) bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	request, isElicitation := event.(*ElicitationRequestEvent)
+	if isElicitation && request.ElicitationID != "" && h.elicitations[request.ElicitationID] {
+		return true
+	}
+	choice, ok := event.(*AgentChoiceEvent)
+	if ok && choice.MessageID != "" && h.complete[choice.MessageID] {
+		return true // already restored from a snapshot
+	}
+	if !send(event) {
+		return false
+	}
+	if isElicitation && request.ElicitationID != "" {
+		h.elicitations[request.ElicitationID] = true
+	}
+	if ok {
+		if choice.MessageID == "" {
+			h.unidentified = true
+		} else {
+			content := h.content[choice.MessageID]
+			if content == nil {
+				content = new(strings.Builder)
+				h.content[choice.MessageID] = content
+			}
+			content.WriteString(choice.Content)
+			h.sessions[choice.MessageID] = choice.SessionID
+		}
+	}
+	return true
+}
+
+func (h *remoteMessageHistory) reconcile(snapshot *api.SessionSnapshotResponse, send func(Event)) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.unidentified {
+		return errors.New("cannot safely reconcile assistant messages without message IDs")
+	}
+	// Validate the whole snapshot before emitting any append-only deltas.
+	seen := make(map[string]bool)
+	for _, msg := range snapshot.Messages {
+		if !recoverableAssistantText(msg) {
+			continue
+		}
+		id := msg.Message.MessageID
+		var delivered string
+		if content := h.content[id]; content != nil {
+			delivered = content.String()
+		}
+		if id == "" || seen[id] || !strings.HasPrefix(msg.Message.Content, delivered) {
+			return errors.New("cannot safely reconcile changed or ambiguous assistant messages")
+		}
+		seen[id] = true
+	}
+	for _, msg := range snapshot.Messages {
+		if !recoverableAssistantText(msg) {
+			continue
+		}
+		id := msg.Message.MessageID
+		content := h.content[id]
+		if content == nil {
+			content = new(strings.Builder)
+			h.content[id] = content
+		}
+		if suffix := strings.TrimPrefix(msg.Message.Content, content.String()); suffix != "" {
+			sessionID := cmp.Or(h.sessions[id], snapshot.ID)
+			send(AgentChoice(msg.AgentName, sessionID, suffix, id))
+			content.WriteString(suffix)
+		}
+		h.complete[id] = true
+	}
+	return nil
 }
 
 // RemoteRuntimeOption is a function for configuring the RemoteRuntime
@@ -156,10 +291,11 @@ func (r *RemoteRuntime) SetCurrentAgent(ctx context.Context, agentName string) e
 
 // CurrentAgentTools returns the tools for the current agent from the session.
 func (r *RemoteRuntime) CurrentAgentTools(ctx context.Context) ([]tools.Tool, error) {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return nil, nil
 	}
-	return r.client.GetSessionTools(ctx, r.sessionID)
+	return r.client.GetSessionTools(ctx, sessionID)
 }
 
 // CurrentAgentToolsetStatuses is not implemented for remote runtimes; the
@@ -171,10 +307,11 @@ func (r *RemoteRuntime) CurrentAgentToolsetStatuses() []tools.ToolsetStatus {
 
 // RestartToolset restarts a toolset on the remote server.
 func (r *RemoteRuntime) RestartToolset(ctx context.Context, toolsetName string) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.RestartSessionToolset(ctx, r.sessionID, toolsetName)
+	return r.client.RestartSessionToolset(ctx, sessionID, toolsetName)
 }
 
 // EmitStartupInfo emits initial agent, team, and toolset information
@@ -257,14 +394,23 @@ func (r *RemoteRuntime) readCurrentAgentConfig(ctx context.Context) latest.Agent
 
 // RunStream starts the agent's interaction loop and returns a channel of events
 func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-chan Event {
-	slog.DebugContext(ctx, "Starting remote runtime stream", "agent", r.currentAgent, "session_id", r.sessionID)
+	slog.DebugContext(ctx, "Starting remote runtime stream", "agent", r.currentAgent, "session_id", r.activeSessionID())
 	events := make(chan Event, defaultEventChannelCapacity)
 
 	go func() {
 		defer close(events)
+		for !r.reconcileMu.TryRLock() {
+			if !waitEventStreamRetry(ctx, 250*time.Millisecond) {
+				return
+			}
+		}
+		defer r.reconcileMu.RUnlock()
 
 		messages := r.convertSessionMessages(sess)
+		r.stateMu.Lock()
 		r.sessionID = sess.ID
+		r.stateMu.Unlock()
+		r.startBackgroundEvents(ctx, sess.ID)
 
 		// Snapshot the queued override but do NOT clear it yet: if the
 		// request fails before the server can persist it, clearing here
@@ -278,13 +424,13 @@ func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-
 		var err error
 
 		if r.currentAgent != "" {
-			streamChan, err = r.client.RunAgentWithAgentName(ctx, r.sessionID, r.agentFilename, r.currentAgent, messages, model)
+			streamChan, err = r.client.RunAgentWithAgentName(ctx, sess.ID, r.agentFilename, r.currentAgent, messages, model)
 		} else {
-			streamChan, err = r.client.RunAgent(ctx, r.sessionID, r.agentFilename, messages, model)
+			streamChan, err = r.client.RunAgent(ctx, sess.ID, r.agentFilename, messages, model)
 		}
 
 		if err != nil {
-			events <- Error(fmt.Sprintf("failed to start remote agent: %v", err))
+			sendClientEvent(ctx, events, Error(fmt.Sprintf("failed to start remote agent: %v", err)))
 			return
 		}
 
@@ -299,12 +445,42 @@ func (r *RemoteRuntime) RunStream(ctx context.Context, sess *session.Session) <-
 			r.pendingMu.Unlock()
 		}
 
-		// Consume events from the agent stream
-		for streamEvent := range streamChan {
-			if elicitationRequest, ok := streamEvent.(*ElicitationRequestEvent); ok {
-				r.pendingOAuthElicitation = elicitationRequest
+		// Drain on cancellation too: alternate clients may finish teardown
+		// by emitting events after the context is cancelled.
+		defer func() {
+			for range streamChan {
 			}
-			events <- streamEvent
+		}()
+		var sawRootStop, sawError bool
+		send := func(event Event) bool { return sendClientEvent(ctx, events, event) }
+		for streamEvent := range streamChan {
+			switch event := streamEvent.(type) {
+			case *StreamStoppedEvent:
+				sawRootStop = sawRootStop || event.SessionID == "" || event.SessionID == sess.ID
+			case *ErrorEvent:
+				sawError = true
+			}
+			if elicitationRequest, ok := streamEvent.(*ElicitationRequestEvent); ok {
+				r.stateMu.Lock()
+				r.pendingOAuthElicitation = elicitationRequest
+				r.stateMu.Unlock()
+			}
+			r.backgroundMu.Lock()
+			subscription := r.background
+			r.backgroundMu.Unlock()
+			if subscription != nil && subscription.sessionID == sess.ID {
+				if !subscription.history.deliver(streamEvent, send) {
+					return
+				}
+			} else if !send(streamEvent) {
+				return
+			}
+		}
+		if !sawRootStop && ctx.Err() == nil {
+			if !sawError {
+				sendClientEvent(ctx, events, Error("remote agent stream ended before completion; the response may be incomplete"))
+			}
+			sendClientEvent(ctx, events, StreamStopped(sess.ID, r.currentAgent, "error"))
 		}
 	}()
 
@@ -334,20 +510,22 @@ func (r *RemoteRuntime) Run(ctx context.Context, sess *session.Session) ([]sessi
 // Steer enqueues a user message for mid-turn injection into the running
 // agent loop on the remote server.
 func (r *RemoteRuntime) Steer(ctx context.Context, msg QueuedMessage) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.SteerSession(ctx, r.sessionID, []api.Message{
+	return r.client.SteerSession(ctx, sessionID, []api.Message{
 		{Content: msg.Content, MultiContent: msg.MultiContent},
 	})
 }
 
 // FollowUp enqueues a message for end-of-turn processing on the remote server.
 func (r *RemoteRuntime) FollowUp(ctx context.Context, msg QueuedMessage) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.FollowUpSession(ctx, r.sessionID, []api.Message{
+	return r.client.FollowUpSession(ctx, sessionID, []api.Message{
 		{Content: msg.Content, MultiContent: msg.MultiContent},
 	})
 }
@@ -358,25 +536,27 @@ func (r *RemoteRuntime) QueueStatus() QueueStatus {
 
 // Resume allows resuming execution after user confirmation
 func (r *RemoteRuntime) Resume(ctx context.Context, req ResumeRequest) {
-	slog.DebugContext(ctx, "Resuming remote runtime", "agent", r.currentAgent, "type", req.Type, "reason", req.Reason, "tool_name", req.ToolName, "session_id", r.sessionID)
+	sessionID := r.activeSessionID()
+	slog.DebugContext(ctx, "Resuming remote runtime", "agent", r.currentAgent, "type", req.Type, "reason", req.Reason, "tool_name", req.ToolName, "session_id", sessionID)
 
-	if r.sessionID == "" {
+	if sessionID == "" {
 		slog.ErrorContext(ctx, "Cannot resume: no session ID available")
 		return
 	}
 
-	if err := r.client.ResumeSession(ctx, r.sessionID, string(req.Type), req.Reason, req.ToolName); err != nil {
-		slog.ErrorContext(ctx, "Failed to resume remote session", "error", err, "session_id", r.sessionID)
+	if err := r.client.ResumeSession(ctx, sessionID, string(req.Type), req.Reason, req.ToolName); err != nil {
+		slog.ErrorContext(ctx, "Failed to resume remote session", "error", err, "session_id", sessionID)
 	}
 }
 
 // Summarize generates a summary for the session by compacting it server-side.
 func (r *RemoteRuntime) Summarize(ctx context.Context, sess *session.Session, _ string, sink EventSink) {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		sink.Emit(SessionSummary(sess.ID, "No active session to summarize", r.currentAgent, 0, 0, "", nil))
 		return
 	}
-	if err := r.client.CompactSession(ctx, r.sessionID); err != nil {
+	if err := r.client.CompactSession(ctx, sessionID); err != nil {
 		slog.WarnContext(ctx, "Failed to compact session", "error", err)
 		sink.Emit(SessionSummary(sess.ID, fmt.Sprintf("Compaction failed: %v", err), r.currentAgent, 0, 0, "", nil))
 		return
@@ -402,15 +582,19 @@ func (r *RemoteRuntime) convertSessionMessages(sess *session.Session) []api.Mess
 
 // ResumeElicitation sends an elicitation response back to a waiting elicitation request
 func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	sessionID := r.activeSessionID()
 	id := firstElicitationID(elicitationID)
-	slog.DebugContext(ctx, "Resuming remote runtime with elicitation response", "agent", r.currentAgent, "action", action, "session_id", r.sessionID, "elicitation_id", id)
+	slog.DebugContext(ctx, "Resuming remote runtime with elicitation response", "agent", r.currentAgent, "action", action, "session_id", sessionID, "elicitation_id", id)
 
-	err := r.handleOAuthElicitation(ctx, r.pendingOAuthElicitation)
+	r.stateMu.Lock()
+	pending := r.pendingOAuthElicitation
+	r.stateMu.Unlock()
+	err := r.handleOAuthElicitation(ctx, pending)
 	if err != nil {
 		return err
 	}
 
-	if err := r.client.ResumeElicitation(ctx, r.sessionID, action, content, id); err != nil {
+	if err := r.client.ResumeElicitation(ctx, sessionID, action, content, id); err != nil {
 		return err
 	}
 
@@ -418,6 +602,7 @@ func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.Elic
 }
 
 func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *ElicitationRequestEvent) error {
+	sessionID := r.activeSessionID()
 	if req == nil {
 		return nil
 	}
@@ -428,7 +613,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	if !ok {
 		err := errors.New("server_url missing from elicitation metadata")
 		slog.ErrorContext(ctx, "Failed to extract server_url", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -436,7 +621,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	if !ok {
 		err := errors.New("auth_server_metadata missing from elicitation metadata")
 		slog.ErrorContext(ctx, "Failed to extract auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -444,12 +629,12 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	metadataBytes, err := json.Marshal(authServerMetadata)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to marshal auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to marshal auth_server_metadata: %w", err)
 	}
 	if err := json.Unmarshal(metadataBytes, &authMetadata); err != nil {
 		slog.ErrorContext(ctx, "Failed to unmarshal auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to unmarshal auth_server_metadata: %w", err)
 	}
 
@@ -469,7 +654,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	callbackServer, err := oauthflow.NewCallbackServer(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to create callback server", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to create callback server: %w", err)
 	}
 	defer func() {
@@ -484,7 +669,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 
 	if err := callbackServer.Start(); err != nil {
 		slog.ErrorContext(ctx, "Failed to start callback server", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to start callback server: %w", err)
 	}
 
@@ -497,21 +682,21 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 		clientID, clientSecret, err = oauthflow.RegisterClient(oauthCtx, &authMetadata, redirectURI, nil)
 		if err != nil {
 			slog.ErrorContext(ctx, "Dynamic client registration failed", "error", err)
-			_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+			_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 			return fmt.Errorf("failed to register client: %w", err)
 		}
 		slog.DebugContext(ctx, "Client registered successfully", "client_id", clientID)
 	} else {
 		err := errors.New("authorization server does not support dynamic client registration")
 		slog.ErrorContext(ctx, "Client registration not supported", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
 	state, err := oauthflow.GenerateState()
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to generate state", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to generate state: %w", err)
 	}
 
@@ -534,14 +719,14 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	code, receivedState, err := oauthflow.RequestAuthorizationCode(oauthCtx, authURL, callbackServer, state)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to get authorization code", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to get authorization code: %w", err)
 	}
 
 	if receivedState != state {
 		err := fmt.Errorf("state mismatch: expected %s, got %s", state, receivedState)
 		slog.ErrorContext(ctx, "State mismatch in authorization response", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -559,7 +744,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to exchange code for token", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
+		_ = r.client.ResumeElicitation(ctx, sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to exchange code for token: %w", err)
 	}
 
@@ -577,7 +762,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	}
 
 	slog.DebugContext(ctx, "Sending token to server")
-	if err := r.client.ResumeElicitation(ctx, r.sessionID, tools.ElicitationActionAccept, tokenData, req.ElicitationID); err != nil {
+	if err := r.client.ResumeElicitation(ctx, sessionID, tools.ElicitationActionAccept, tokenData, req.ElicitationID); err != nil {
 		slog.ErrorContext(ctx, "Failed to send token to server", "error", err)
 		return fmt.Errorf("failed to send token to server: %w", err)
 	}
@@ -661,19 +846,21 @@ func (r *RemoteRuntime) RunSkillFork(context.Context, *session.Session, skills.R
 
 // UpdateSessionTitle updates the title of the current session on the remote server.
 func (r *RemoteRuntime) UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error {
+	sessionID := r.activeSessionID()
 	sess.SetTitle(title)
-	if r.sessionID == "" {
+	if sessionID == "" {
 		return errors.New("cannot update session title: no session ID available")
 	}
-	return r.client.UpdateSessionTitle(ctx, r.sessionID, title)
+	return r.client.UpdateSessionTitle(ctx, sessionID, title)
 }
 
 // CurrentMCPPrompts returns available MCP prompts from the server.
 func (r *RemoteRuntime) CurrentMCPPrompts(ctx context.Context) map[string]tools.PromptInfo {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return make(map[string]tools.PromptInfo)
 	}
-	prompts, err := r.client.GetSessionMCPPrompts(ctx, r.sessionID)
+	prompts, err := r.client.GetSessionMCPPrompts(ctx, sessionID)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to get MCP prompts", "error", err)
 		return make(map[string]tools.PromptInfo)
@@ -700,10 +887,11 @@ func (r *RemoteRuntime) CurrentMCPPrompts(ctx context.Context) map[string]tools.
 
 // ExecuteMCPPrompt executes an MCP prompt on the server.
 func (r *RemoteRuntime) ExecuteMCPPrompt(ctx context.Context, promptName string, args map[string]string) (string, error) {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return "", errors.New("no active session")
 	}
-	return r.client.ExecuteSessionMCPPrompt(ctx, r.sessionID, promptName, args)
+	return r.client.ExecuteSessionMCPPrompt(ctx, sessionID, promptName, args)
 }
 
 // TitleGenerator is not supported on remote runtimes (titles are generated server-side).
@@ -713,10 +901,11 @@ func (r *RemoteRuntime) TitleGenerator(context.Context) *sessiontitle.Generator 
 
 // TogglePause pauses/resumes a session on the server.
 func (r *RemoteRuntime) TogglePause(ctx context.Context) (bool, error) {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return false, errors.New("no active session")
 	}
-	return false, r.client.PauseSession(ctx, r.sessionID)
+	return false, r.client.PauseSession(ctx, sessionID)
 }
 
 // OnToolsChanged is a no-op for remote runtimes; tool-list changes are
@@ -724,89 +913,301 @@ func (r *RemoteRuntime) TogglePause(ctx context.Context) (bool, error) {
 // than via an out-of-band callback.
 func (r *RemoteRuntime) OnToolsChanged(func(Event)) {}
 
-// OnBackgroundEvent is a no-op for remote runtimes; background agent tasks
-// run server-side and their events are not forwarded out-of-band.
-func (r *RemoteRuntime) OnBackgroundEvent(func(Event)) {}
+// OnBackgroundEvent receives server-side recalls and out-of-band events.
+// The subscription outlives individual turns and stops on Close or unregister.
+func (r *RemoteRuntime) OnBackgroundEvent(handler func(Event)) {
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	r.backgroundHandler = handler
+	if handler == nil && r.background != nil {
+		r.background.cancel()
+		r.background = nil
+	}
+}
+
+func (r *RemoteRuntime) activeSessionID() string {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	return r.sessionID
+}
+
+func (r *RemoteRuntime) emitBackgroundEvent(subscription *remoteEventSubscription, event Event) {
+	r.backgroundMu.Lock()
+	handler := r.backgroundHandler
+	active := r.background == subscription && !r.closed
+	r.backgroundMu.Unlock()
+	if active && handler != nil {
+		if request, ok := event.(*ElicitationRequestEvent); ok {
+			r.stateMu.Lock()
+			r.pendingOAuthElicitation = request
+			r.stateMu.Unlock()
+		}
+		subscription.history.deliver(event, func(event Event) bool {
+			handler(event)
+			return true
+		})
+	}
+}
+
+func (r *RemoteRuntime) startBackgroundEvents(ctx context.Context, sessionID string) {
+	client, ok := r.client.(remoteEventClient)
+	if !ok {
+		return
+	}
+	r.backgroundInit.Lock()
+	defer r.backgroundInit.Unlock()
+	r.backgroundMu.Lock()
+	if r.closed || r.backgroundHandler == nil {
+		r.backgroundMu.Unlock()
+		return
+	}
+	if r.background != nil && r.background.sessionID == sessionID {
+		r.backgroundMu.Unlock()
+		return
+	}
+	if r.background != nil {
+		r.background.cancel()
+	}
+	backgroundCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	subscription := &remoteEventSubscription{cancel: cancel, sessionID: sessionID, history: newRemoteMessageHistory(nil)}
+	r.background = subscription
+	r.backgroundMu.Unlock()
+
+	// Capture the cursor BEFORE submitting a turn; no old answers are replayed.
+	snapshotCtx, cancelSnapshot := context.WithCancel(ctx)
+	stop := context.AfterFunc(backgroundCtx, cancelSnapshot)
+	snapshot, err := client.GetSessionSnapshot(snapshotCtx, sessionID)
+	stop()
+	cancelSnapshot()
+	if err == nil && (snapshot == nil || snapshot.ID != sessionID) {
+		err = errors.New("snapshot session ID does not match subscription")
+	}
+	if err == nil && snapshot.Streaming {
+		err = errors.New("session is already streaming; no safe background baseline")
+	}
+	if err != nil {
+		r.emitBackgroundEvent(subscription, Warning(fmt.Sprintf("remote background events unavailable: %v", err), ""))
+		cancel()
+		r.backgroundMu.Lock()
+		if r.background == subscription {
+			r.background = nil
+		}
+		r.backgroundMu.Unlock()
+		return
+	}
+	r.backgroundMu.Lock()
+	if r.background != subscription || r.closed {
+		r.backgroundMu.Unlock()
+		cancel()
+		return
+	}
+	subscription.history = newRemoteMessageHistory(snapshot.Messages)
+	r.backgroundMu.Unlock()
+
+	go func() {
+		defer cancel()
+		events, err := r.openBackgroundEvents(backgroundCtx, client, sessionID, snapshot.LastEventSeq)
+		if err != nil {
+			r.emitBackgroundEvent(subscription, Error(fmt.Sprintf("subscribing to remote background events: %v", err)))
+			return
+		}
+		for {
+			select {
+			case <-backgroundCtx.Done():
+				return
+			case event, ok := <-events:
+				if !ok {
+					return // session ended; never blindly replay old history
+				}
+				if failure, ok := event.(*ErrorEvent); ok && failure.Error == sessionEventGapError {
+					r.emitBackgroundEvent(subscription, Warning("remote event gap; recovering saved assistant text when idle (tool and interaction events may be incomplete)", ""))
+					if !waitEventStreamRetry(backgroundCtx, 250*time.Millisecond) {
+						return
+					}
+					var err error
+					snapshot, err = r.reconcileBackgroundSnapshot(backgroundCtx, subscription, client)
+					if err != nil {
+						r.emitBackgroundEvent(subscription, Error(fmt.Sprintf("recovering remote event gap: %v", err)))
+						return
+					}
+					events, err = r.openBackgroundEvents(backgroundCtx, client, sessionID, snapshot.LastEventSeq)
+					if err != nil {
+						r.emitBackgroundEvent(subscription, Error(fmt.Sprintf("resuming remote background events: %v", err)))
+						return
+					}
+					continue
+				}
+				r.emitBackgroundEvent(subscription, event)
+			}
+		}
+	}()
+}
+
+// /events may not exist until the first recall or elicitation creates its log.
+func (r *RemoteRuntime) openBackgroundEvents(ctx context.Context, client remoteEventClient, sessionID string, since uint64) (<-chan Event, error) {
+	delay := 250 * time.Millisecond
+	for {
+		events, err := client.StreamSessionEventsSince(ctx, sessionID, since)
+		if err == nil {
+			return events, nil
+		}
+		var httpErr *sessionEventHTTPError
+		if errors.As(err, &httpErr) && httpErr.status >= 400 && httpErr.status < 500 && httpErr.status != http.StatusNotFound && httpErr.status != http.StatusTooManyRequests {
+			return nil, err
+		}
+		if !waitEventStreamRetry(ctx, delay) {
+			return nil, ctx.Err()
+		}
+		delay = min(2*delay, 5*time.Second)
+	}
+}
+
+func (r *RemoteRuntime) reconcileBackgroundSnapshot(ctx context.Context, subscription *remoteEventSubscription, client remoteEventClient) (*api.SessionSnapshotResponse, error) {
+	for {
+		if !r.reconcileMu.TryLock() {
+			if !waitEventStreamRetry(ctx, 250*time.Millisecond) {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		snapshot, err := r.reconcileIdleSnapshot(ctx, subscription, client)
+		r.reconcileMu.Unlock()
+		if err != nil || !snapshot.Streaming {
+			return snapshot, err
+		}
+		if !waitEventStreamRetry(ctx, 250*time.Millisecond) {
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (r *RemoteRuntime) reconcileIdleSnapshot(ctx context.Context, subscription *remoteEventSubscription, client remoteEventClient) (*api.SessionSnapshotResponse, error) {
+	snapshot, err := client.GetSessionSnapshot(ctx, subscription.sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil || snapshot.ID != subscription.sessionID {
+		return nil, errors.New("snapshot session ID does not match subscription")
+	}
+	if snapshot.Streaming {
+		return snapshot, nil // partial saved messages cannot define a safe cursor
+	}
+	r.backgroundMu.Lock()
+	handler := r.backgroundHandler
+	active := r.background == subscription && !r.closed
+	r.backgroundMu.Unlock()
+	if !active || handler == nil || ctx.Err() != nil {
+		return nil, context.Canceled
+	}
+	if err := subscription.history.reconcile(snapshot, handler); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
 
 // OnElicitationRequest is a no-op for remote runtimes; elicitation requests
-// (including from server-side background jobs) arrive as ElicitationRequestEvent
-// values on the RunStream channel itself (see the RunStream forwarding loop
-// above), so there is no separate out-of-band sink to register.
+// arrive on RunStream, or through OnBackgroundEvent when a cursor-based
+// subscription is active, so there is no additional sink to register.
 //
 // RemoteRuntime deliberately does NOT implement
 // LocalRuntime.MirrorsElicitationOnRunStream: embedders that forward
 // RunStream events verbatim (e.g. pkg/app.App) rely on that capability check
-// to tell that this runtime's RunStream copy is its ONLY delivery and must
-// reach them unfiltered (#3584 review).
+// to forward RunStream elicitations when no background subscription is active.
 func (r *RemoteRuntime) OnElicitationRequest(func(Event)) {}
 
-// Close is a no-op for remote runtimes.
+// RetireBackgroundEvents stops deliveries for a replaced conversation.
+func (r *RemoteRuntime) RetireBackgroundEvents() {
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	if r.background != nil {
+		r.background.cancel()
+		r.background = nil
+	}
+}
+
+// Close stops the out-of-band session subscription.
 func (r *RemoteRuntime) Close() error {
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	r.closed = true
+	r.backgroundHandler = nil
+	if r.background != nil {
+		r.background.cancel()
+		r.background = nil
+	}
 	return nil
 }
 
 // GetSnapshots retrieves available snapshots for the current session.
 func (r *RemoteRuntime) GetSnapshots(ctx context.Context) ([]map[string]any, error) {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return nil, errors.New("no active session")
 	}
-	return r.client.GetSessionSnapshots(ctx, r.sessionID)
+	return r.client.GetSessionSnapshots(ctx, sessionID)
 }
 
 // Undo reverts to the previous snapshot on the remote server.
 func (r *RemoteRuntime) Undo(ctx context.Context) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.UndoSession(ctx, r.sessionID)
+	return r.client.UndoSession(ctx, sessionID)
 }
 
 // Reset resets the session to its initial state on the remote server.
 func (r *RemoteRuntime) Reset(ctx context.Context) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.ResetSession(ctx, r.sessionID)
+	return r.client.ResetSession(ctx, sessionID)
 }
 
 // AddMessageToSession adds a message to the current session on the remote server.
 func (r *RemoteRuntime) AddMessageToSession(ctx context.Context, msg *session.Message) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.AddMessage(ctx, r.sessionID, msg)
+	return r.client.AddMessage(ctx, sessionID, msg)
 }
 
 // UpdateSessionMessage updates a message in the current session on the remote server.
 func (r *RemoteRuntime) UpdateSessionMessage(ctx context.Context, msgID string, msg *session.Message) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.UpdateMessage(ctx, r.sessionID, msgID, msg)
+	return r.client.UpdateMessage(ctx, sessionID, msgID, msg)
 }
 
 // AddSessionSummary adds a summary item to the current session on the remote server.
 func (r *RemoteRuntime) AddSessionSummary(ctx context.Context, item session.Item) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.AddSummary(ctx, r.sessionID, item)
+	return r.client.AddSummary(ctx, sessionID, item)
 }
 
 // UpdateSessionTokens updates token counts for the current session on the remote server.
 func (r *RemoteRuntime) UpdateSessionTokens(ctx context.Context, inputTokens, outputTokens int64, cost float64) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.UpdateSessionTokens(ctx, r.sessionID, inputTokens, outputTokens, cost)
+	return r.client.UpdateSessionTokens(ctx, sessionID, inputTokens, outputTokens, cost)
 }
 
 // SetSessionStarred sets the starred status for the current session on the remote server.
 func (r *RemoteRuntime) SetSessionStarred(ctx context.Context, starred bool) error {
-	if r.sessionID == "" {
+	sessionID := r.activeSessionID()
+	if sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.SetSessionStarred(ctx, r.sessionID, starred)
+	return r.client.SetSessionStarred(ctx, sessionID, starred)
 }
 
 var _ Runtime = (*RemoteRuntime)(nil)

@@ -142,7 +142,7 @@ func TestAppRunKeepsWorkScopedToOriginalSession(t *testing.T) {
 				app.ReplaceSession(t.Context(), newSession)
 				close(rt.release)
 
-				event := <-app.events
+				event := unwrappedTestEvent(<-app.events)
 				stop, ok := event.(*runtime.StreamStoppedEvent)
 				require.True(t, ok)
 				assert.Equal(t, oldSession.ID, stop.SessionID)
@@ -275,7 +275,7 @@ func TestGenerateTitleKeepsOriginalSession(t *testing.T) {
 
 		assert.Equal(t, "Original title", oldSession.TitleSnapshot())
 		assert.Empty(t, newSession.TitleSnapshot())
-		titleEvent, ok := (<-app.events).(*runtime.SessionTitleEvent)
+		titleEvent, ok := unwrappedTestEvent(<-app.events).(*runtime.SessionTitleEvent)
 		require.True(t, ok)
 		assert.Equal(t, oldSession.ID, titleEvent.SessionID)
 	})

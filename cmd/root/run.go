@@ -1163,7 +1163,6 @@ func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess 
 		opts = append(opts, app.WithTitleGenerator(gen))
 	}
 	a := app.New(ctx, rt, sess, opts...)
-	a.Start(ctx)
 
 	firstMessage, err := readInitialMessage(args)
 	if err != nil {

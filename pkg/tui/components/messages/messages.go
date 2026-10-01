@@ -89,6 +89,10 @@ type Model interface {
 	AppendToolOutput(msg *runtime.ToolCallOutputEvent) tea.Cmd
 	AddToolResult(msg *runtime.ToolCallResponseEvent, status types.ToolStatus) tea.Cmd
 	AppendToLastMessage(agentName, content string) tea.Cmd
+	AppendAssistantContent(sessionID, messageID, agentName, content string) tea.Cmd
+	AppendReasoningContent(sessionID, messageID, agentName, content string) tea.Cmd
+	ReconcileAssistantContent(sessionID, messageID, agentName, content string) tea.Cmd
+	AppendAssistantMediaContent(sessionID, messageID, agentName string, media []types.AssistantMedia) tea.Cmd
 	// BreakMessageGroup prevents merging across streams without flushing deferred content.
 	BreakMessageGroup()
 	// AppendAssistantMedia attaches generated media to the agent's current
@@ -1938,6 +1942,7 @@ func (m *model) LoadFromSession(sess *session.Session, generatedMedia map[int][]
 			restoredMedia := generatedMedia[pos]
 			if hasContent || len(restoredMedia) > 0 {
 				msg := types.Agent(types.MessageTypeAssistant, smsg.AgentName, smsg.Message.Content)
+				msg.SessionID, msg.MessageID = sess.ID, smsg.Message.MessageID
 				msg.AssistantMedia = restoredMedia
 				appendSessionMessage(msg, m.createMessageView(msg))
 			}

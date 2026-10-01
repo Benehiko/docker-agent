@@ -53,7 +53,7 @@ func (f *runExecFlags) recallCoordinatorOpt(ctx context.Context, rt runtime.Runt
 // plane's per-session event log (GET /api/sessions/:id/events).
 func registerAppEventSource(sm *server.SessionManager, sessionID string, a *app.App) {
 	sm.RegisterEventSource(sessionID, func(ctx context.Context, send func(any)) {
-		a.SubscribeWith(ctx, func(msg tea.Msg) {
+		a.SubscribeReliable(ctx, func(msg tea.Msg) {
 			if ev, ok := msg.(runtime.Event); ok {
 				send(ev)
 			}

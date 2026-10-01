@@ -94,3 +94,30 @@ func TestPendingSpinnerDoesNotMergeDistinctMessageIDs(t *testing.T) {
 	require.Contains(t, ansi.Strip(p.messages.View()), "FINAL-ANSWER")
 	require.Equal(t, 2, p.messages.MessageTypeCount(types.MessageTypeAssistant))
 }
+
+func TestCanonicalContentCannotRevealSuppressedToolXML(t *testing.T) {
+	t.Parallel()
+	p, sess := newContentTestPage(t)
+	msg := session.NewAgentMessage("root", &chatapi.Message{Role: chatapi.MessageRoleAssistant, MessageID: "answer", Content: `safe prefix<tool_call>{"arguments":"PRIVATE-TOOL-ARGUMENT`})
+	_, _ = p.handleRuntimeEvent(runtime.AgentChoice("root", sess.ID, "safe prefix", "answer"))
+	_, _ = p.handleRuntimeEvent(runtime.MessageAdded(sess.ID, msg, "root"))
+	require.Contains(t, ansi.Strip(p.messages.View()), "safe prefix")
+	require.NotContains(t, ansi.Strip(p.messages.View()), "PRIVATE-TOOL-ARGUMENT")
+	sess.AddMessage(msg)
+	p.messages.LoadFromSession(sess, nil)
+	require.NotContains(t, ansi.Strip(p.messages.View()), "PRIVATE-TOOL-ARGUMENT")
+}
+
+func TestRecoveredSessionClearsNestedBusyWithoutStartingQueuedRun(t *testing.T) {
+	t.Parallel()
+	p, sess := newContentTestPage(t)
+	for _, id := range []string{sess.ID, "child", "nested"} {
+		_, _ = p.handleRuntimeEvent(runtime.StreamStarted(id, "root"))
+	}
+	p.messageQueue = []queuedMessage{{content: "must not run"}}
+	_, _ = p.handleRuntimeEvent(runtime.SessionRecovered(sess.ID))
+	require.Zero(t, p.streamDepth)
+	require.Empty(t, p.agentStack)
+	require.False(t, p.working)
+	require.Len(t, p.messageQueue, 1)
+}

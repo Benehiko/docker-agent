@@ -44,6 +44,21 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStarted(e.SessionID)
 	case *runtime.UserMessageEvent:
 		m.handleUserMessageEvent(e)
+	case *runtime.SessionRecoveredEvent:
+		if e.SessionID != "" && e.SessionID != m.contentSession("") {
+			return
+		}
+		m.screen.Transcript.FlushPending()
+		m.screen.Transcript.FinalizeTools(tuitypes.ToolStatusError, m.sessionState)
+		m.streamDepth = 0
+		m.usage.RecoverIdle(m.contentSession(e.SessionID))
+		m.applyUsageSnapshot()
+		m.busy = false
+		m.runCancel = nil
+		m.cancelMarkerPending = false
+		m.screen.Confirm = nil
+		m.status.Compacting = false
+		m.contentIdentity.Finish(m.contentSession(e.SessionID))
 	case *runtime.StreamStoppedEvent:
 		m.contentIdentity.Finish(m.contentSession(e.SessionID))
 		m.trackStreamStopped()
@@ -63,7 +78,7 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		}
 		sessionID := m.contentSession(e.SessionID)
 		identity := m.contentIdentity.Resolve(sessionID, e.Message.Message.MessageID)
-		m.screen.Transcript.ReconcileAssistantContent(identity, e.Message.Message.Content)
+		m.screen.Transcript.ReconcileAssistantContent(identity, chat.VisibleAssistantContent(e.Message.Message.Content))
 		m.contentIdentity.Finish(sessionID)
 	case *runtime.PartialToolCallEvent:
 		m.screen.Transcript.FlushPending()

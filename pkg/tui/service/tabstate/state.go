@@ -99,6 +99,12 @@ func (s *State) Apply(msg tea.Msg, active bool) (changed, bell bool) {
 		}
 		s.running = false
 		s.retainDetachedElicitations()
+	case *runtime.SessionRecoveredEvent:
+		if !isTopLevelStream(s.sessionID, ev.SessionID) {
+			return false, false
+		}
+		s.running = false
+		s.retainDetachedElicitations()
 	case messages.StreamCancelledMsg:
 		s.running = false
 		s.retainDetachedElicitations()
@@ -150,6 +156,8 @@ func (s *State) RetiresAttention(boundary, event tea.Msg) bool {
 		if !isTopLevelStream(s.sessionID, msg.SessionID) {
 			return false
 		}
+	case *runtime.SessionRecoveredEvent:
+		return isTopLevelStream(s.sessionID, msg.SessionID) && !isDetachedElicitation(s.sessionID, event)
 	case messages.StreamCancelledMsg:
 	default:
 		return false

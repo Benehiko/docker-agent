@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 )
@@ -59,4 +60,40 @@ func TestRetiredLeanEventsCannotAffectReplacement(t *testing.T) {
 	m.handleEvent(t.Context(), leanEvent{generation: 1, inner: runtime.AgentChoice("root", "same-session", "NEW-ANSWER", "new")})
 	require.NotContains(t, leanTranscriptText(m), "OLD-ANSWER")
 	require.Contains(t, leanTranscriptText(m), "NEW-ANSWER")
+}
+
+func TestLeanCanonicalContentCannotRevealSuppressedToolXML(t *testing.T) {
+	t.Parallel()
+	m := bareModel(40)
+	msg := session.NewAgentMessage("root", &chat.Message{Role: chat.MessageRoleAssistant, MessageID: "answer", Content: `safe prefix<tool_call>{"arguments":"PRIVATE-TOOL-ARGUMENT`})
+	m.handleEvent(t.Context(), runtime.AgentChoice("root", "session", "safe prefix", "answer"))
+	m.handleEvent(t.Context(), runtime.MessageAdded("session", msg, "root"))
+	require.Contains(t, leanTranscriptText(m), "safe prefix")
+	require.NotContains(t, leanTranscriptText(m), "PRIVATE-TOOL-ARGUMENT")
+}
+
+func TestLeanRecoveryClearsNestedBusyWithoutDrainingQueue(t *testing.T) {
+	t.Parallel()
+	m := bareModel(40)
+	for range 3 {
+		m.handleEvent(t.Context(), runtime.StreamStarted("session", "root"))
+	}
+	m.queue = []ui.PendingUserMessage{{Content: "must not run"}}
+	m.handleEvent(t.Context(), runtime.SessionRecovered(""))
+	require.Zero(t, m.streamDepth)
+	require.False(t, m.busy)
+	require.Len(t, m.queue, 1)
+}
+
+func TestLeanRecoveryRestoresRootContextUsage(t *testing.T) {
+	t.Parallel()
+	m := bareModel(40)
+	m.handleEvent(t.Context(), runtime.StreamStarted("root", "root"))
+	m.handleEvent(t.Context(), runtime.NewTokenUsageEvent("root", "root", &runtime.Usage{ContextLength: 100}))
+	m.handleEvent(t.Context(), runtime.StreamStarted("child", "child"))
+	m.handleEvent(t.Context(), runtime.NewTokenUsageEvent("child", "child", &runtime.Usage{ContextLength: 999}))
+	m.handleEvent(t.Context(), runtime.SessionRecovered(""))
+	m.handleEvent(t.Context(), runtime.StreamStarted("root", "root"))
+	m.handleEvent(t.Context(), runtime.StreamStopped("root", "root", "normal"))
+	require.Equal(t, int64(100), m.status.ContextLength)
 }

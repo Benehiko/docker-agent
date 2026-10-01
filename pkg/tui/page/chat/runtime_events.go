@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/sound"
 	"github.com/docker/docker-agent/pkg/tools"
 	builtinshell "github.com/docker/docker-agent/pkg/tools/builtin/shell"
+	"github.com/docker/docker-agent/pkg/tui/components/messages"
 	"github.com/docker/docker-agent/pkg/tui/components/notification"
 	"github.com/docker/docker-agent/pkg/tui/components/sidebar"
 	"github.com/docker/docker-agent/pkg/tui/core"
@@ -82,6 +83,19 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 	case *runtime.StreamStartedEvent:
 		return true, p.handleStreamStarted(msg)
 
+	case *runtime.SessionRecoveredEvent:
+		if p.isSubSessionEvent(msg.SessionID) {
+			return true, nil
+		}
+		p.streamDepth = 0
+		p.agentStack = nil
+		p.msgCancel = nil
+		p.streamCancelled = false
+		p.contentIdentity.Finish(p.contentSession(msg.SessionID))
+		p.sidebar.ResetStreamTracking()
+		model, cleanup := p.messages.Update(msg)
+		p.messages = model.(messages.Model)
+		return true, tea.Batch(cleanup, p.forwardToSidebar(msg), p.setWorking(false), p.setPendingResponse(false))
 	case *runtime.StreamStoppedEvent:
 		return true, p.handleStreamStopped(msg)
 

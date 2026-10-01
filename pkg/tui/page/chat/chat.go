@@ -234,6 +234,7 @@ type chatPage struct {
 	streamStartTime  time.Time
 	contentSessionID string
 	contentIdentity  streamcontent.Tracker
+	mediaKeys        map[string]uint64
 
 	// routingID is the tab identity this page's routed UI timers are
 	// addressed to; empty for standalone pages (timers then fire unrouted,

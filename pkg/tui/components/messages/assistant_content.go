@@ -90,10 +90,52 @@ func (m *model) ReconcileAssistantContent(sessionID, messageID, agentName, conte
 
 // AppendAssistantMediaContent keeps media joined to its logical text message.
 func (m *model) AppendAssistantMediaContent(sessionID, messageID, agentName string, media []types.AssistantMedia) tea.Cmd {
+	for i, msg := range slices.Backward(m.messages) {
+		legacyMatch := msg.MessageID == "" && strings.HasPrefix(messageID, "legacy:") && slices.ContainsFunc(msg.AssistantMedia, func(existing types.AssistantMedia) bool {
+			return existing.Key != "" && slices.ContainsFunc(media, func(item types.AssistantMedia) bool { return item.Key == existing.Key })
+		})
+		if msg.Type != types.MessageTypeAssistant || msg.SessionID != sessionID || (msg.MessageID != messageID && !legacyMatch) || msg.Sender != agentName {
+			continue
+		}
+		var added []types.AssistantMedia
+		for _, item := range media {
+			if item.Key != "" && slices.ContainsFunc(msg.AssistantMedia, func(existing types.AssistantMedia) bool { return existing.Key == item.Key }) {
+				continue
+			}
+			added = append(added, item)
+		}
+		if len(added) == 0 {
+			return nil
+		}
+		updated := *msg
+		updated.AssistantMedia = slices.Concat(msg.AssistantMedia, added)
+		m.messages[i] = &updated
+		cmd := m.views[i].(message.Model).SetMessage(&updated)
+		m.invalidateItem(i)
+		return cmd
+	}
 	m.trackMessageIdentity(sessionID, messageID)
 	cmd := m.AppendAssistantMedia(agentName, media)
 	if last := m.lastMessage(); last != nil {
 		last.SessionID, last.MessageID = sessionID, messageID
 	}
 	return cmd
+}
+
+// AdoptAssistantMediaIdentity joins legacy canonical replay to restored manifest media.
+func (m *model) AdoptAssistantMediaIdentity(sessionID, messageID, agentName string, media []types.AssistantMedia) {
+	if !strings.HasPrefix(messageID, "legacy:") {
+		return
+	}
+	for _, msg := range m.messages {
+		if msg.Type != types.MessageTypeAssistant || msg.SessionID != sessionID || msg.MessageID != "" || msg.Sender != agentName {
+			continue
+		}
+		if slices.ContainsFunc(msg.AssistantMedia, func(existing types.AssistantMedia) bool {
+			return existing.Key != "" && slices.ContainsFunc(media, func(item types.AssistantMedia) bool { return item.Key == existing.Key })
+		}) {
+			msg.MessageID = messageID
+			return
+		}
+	}
 }

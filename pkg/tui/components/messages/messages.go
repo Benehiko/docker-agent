@@ -93,6 +93,7 @@ type Model interface {
 	AppendReasoningContent(sessionID, messageID, agentName, content string) tea.Cmd
 	ReconcileAssistantContent(sessionID, messageID, agentName, content string) tea.Cmd
 	AppendAssistantMediaContent(sessionID, messageID, agentName string, media []types.AssistantMedia) tea.Cmd
+	AdoptAssistantMediaIdentity(sessionID, messageID, agentName string, media []types.AssistantMedia)
 	// BreakMessageGroup prevents merging across streams without flushing deferred content.
 	BreakMessageGroup()
 	// AppendAssistantMedia attaches generated media to the agent's current
@@ -336,6 +337,12 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case *runtime.SessionRecoveredEvent:
+		finalizeCmd := m.FinalizeStream()
+		m.removeSpinner()
+		m.removePendingToolCallMessages()
+		m.stopReasoningBlockAnimations()
+		return m, finalizeCmd
 	case messages.StreamCancelledMsg:
 		finalizeCmd := m.FinalizeStream()
 		m.removeSpinner()
@@ -1919,7 +1926,8 @@ func (m *model) LoadFromSession(sess *session.Session, generatedMedia map[int][]
 			appendSessionMessage(msg, m.createMessageView(msg))
 		case chat.MessageRoleAssistant:
 			hasReasoning := smsg.Message.ReasoningContent != ""
-			hasContent := smsg.Message.Content != ""
+			visibleContent := chat.VisibleAssistantContent(smsg.Message.Content)
+			hasContent := visibleContent != ""
 			hasToolCalls := len(smsg.Message.ToolCalls) > 0
 			var reasoningBlock *reasoningblock.Model
 
@@ -1941,7 +1949,7 @@ func (m *model) LoadFromSession(sess *session.Session, generatedMedia map[int][]
 			// live behavior.
 			restoredMedia := generatedMedia[pos]
 			if hasContent || len(restoredMedia) > 0 {
-				msg := types.Agent(types.MessageTypeAssistant, smsg.AgentName, smsg.Message.Content)
+				msg := types.Agent(types.MessageTypeAssistant, smsg.AgentName, visibleContent)
 				msg.SessionID, msg.MessageID = sess.ID, smsg.Message.MessageID
 				msg.AssistantMedia = restoredMedia
 				appendSessionMessage(msg, m.createMessageView(msg))
@@ -2209,6 +2217,7 @@ func (m *model) UpdateAssistantMedia(media []types.AssistantMedia) tea.Cmd {
 		changed := false
 		for j, item := range msg.AssistantMedia {
 			if resolved, ok := byID[item.ID]; ok {
+				resolved.Key = item.Key
 				msg.AssistantMedia[j] = resolved
 				changed = true
 			}

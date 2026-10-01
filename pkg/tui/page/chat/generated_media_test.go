@@ -679,3 +679,56 @@ func TestLocalMediaResultCannotReplaceReloadedPlaceholder(t *testing.T) {
 	require.Len(t, rec.mediaCalls, 1)
 	assert.NotEqual(t, result.Inner.(generatedMediaResolvedMsg).media[0].ID, rec.mediaCalls[0][0].ID)
 }
+
+func TestCanonicalMediaReplayReusesRestoredPlaceholder(t *testing.T) {
+	t.Parallel()
+	sess := restoredMediaSession("owner")
+	sess.Messages[2].Message.Message.MessageID = "image-answer"
+	p, rec := newGeneratedMediaTestPageWithSession(t, &resolverTestRuntime{}, sess)
+	p.Init()
+	before := rec.MessageTypeCount(types.MessageTypeAssistant)
+	_, effects := p.UpdateEffects(runtime.MessageAdded(sess.ID, sess.Messages[2].Message, "root"))
+	require.Equal(t, before, rec.MessageTypeCount(types.MessageTypeAssistant))
+	require.Nil(t, effects.Local, "queued canonical replay must not resolve a second placeholder")
+}
+
+func TestCanonicalMediaJoinsInterleavedLogicalAnswer(t *testing.T) {
+	t.Parallel()
+	p, rec := newGeneratedMediaTestPage(t, &resolverTestRuntime{})
+	p.messages.SetSize(100, 40)
+	_, _ = p.handleRuntimeEvent(runtime.AgentChoice("root", "owner", "answer A", "a"))
+	_, _ = p.handleRuntimeEvent(runtime.AgentChoice("root", "owner", "answer B", "b"))
+	added := assistantMessageAdded("owner", workspaceImagePart("a.png", "a.png", "owner"))
+	added.Message.Message.MessageID = "a"
+	added.Message.Message.Content = "answer A"
+	_, _ = p.handleRuntimeEvent(added)
+	_, _ = p.handleRuntimeEvent(added)
+	require.Equal(t, 2, rec.MessageTypeCount(types.MessageTypeAssistant))
+	require.Contains(t, p.messages.View(), "answer A")
+	require.Contains(t, p.messages.View(), "answer B")
+}
+
+func TestCanonicalMediaResolveThenReplayKeepsStableKey(t *testing.T) {
+	t.Parallel()
+	rt := &resolverTestRuntime{results: map[string]resolverResult{"a.png": {data: testPNGBytes(t)}}}
+	p, _ := newGeneratedMediaTestPage(t, rt)
+	added := assistantMessageAdded("owner", workspaceImagePart("a.png", "a.png", "owner"))
+	added.Message.Message.MessageID = "answer"
+	_, effects := p.UpdateEffects(added)
+	_, _ = p.UpdateEffects(resolveMedia(t, effects.Local))
+	_, effects = p.UpdateEffects(added)
+	require.Nil(t, effects.Local)
+	// A replay must not append an unavailable fallback beside the resolved image.
+	require.NotContains(t, p.messages.View(), "unavailable")
+}
+
+func TestCanonicalLegacyMediaReplayJoinsRestoredMessage(t *testing.T) {
+	t.Parallel()
+	sess := restoredMediaSession("owner")
+	p, rec := newGeneratedMediaTestPageWithSession(t, &resolverTestRuntime{}, sess)
+	p.Init()
+	before := rec.MessageTypeCount(types.MessageTypeAssistant)
+	_, effects := p.UpdateEffects(runtime.MessageAdded(sess.ID, sess.Messages[2].Message, "root"))
+	require.Equal(t, before, rec.MessageTypeCount(types.MessageTypeAssistant))
+	require.Nil(t, effects.Local)
+}

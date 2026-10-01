@@ -68,6 +68,14 @@ type Runtime interface {
 	Supports(capability Capability) bool
 }
 
+// ToolRunner is an optional runtime facility for tools that invoke other tools.
+// RunTool emits the nested call's lifecycle events without adding model-facing
+// conversation messages. It preserves the handler's result and error semantics.
+// Implementations must be safe for concurrent calls.
+type ToolRunner interface {
+	RunTool(ctx context.Context, toolCall ToolCall, tool Tool) (*ToolCallResult, error)
+}
+
 // ErrRecallNotSupported is returned by [Runtime.Recall] implementations that
 // cannot steer an agent loop.
 var ErrRecallNotSupported = errors.New("recall is not supported by this host")

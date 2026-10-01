@@ -10,6 +10,7 @@ import (
 	transfertasktool "github.com/docker/docker-agent/pkg/tools/builtin/transfertask/types"
 	userpromptool "github.com/docker/docker-agent/pkg/tools/builtin/userprompt/types"
 	"github.com/docker/docker-agent/pkg/tui/components/tool"
+	"github.com/docker/docker-agent/pkg/tui/components/tool/codemode"
 	"github.com/docker/docker-agent/pkg/tui/components/tool/directorytree"
 	"github.com/docker/docker-agent/pkg/tui/components/tool/editfile"
 	"github.com/docker/docker-agent/pkg/tui/components/tool/handoff"
@@ -28,6 +29,7 @@ import (
 // NewRegistry creates an independent registry with all builtin renderers.
 func NewRegistry() *tool.Registry {
 	builders := map[string]tool.Builder{
+		"run_tools_with_javascript":           codemode.New,
 		transfertasktool.ToolNameTransferTask: transfertask.New,
 		handofftool.ToolNameHandoff:           handoff.New,
 		filesystem.ToolNameEditFile:           editfile.New,

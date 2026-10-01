@@ -1044,6 +1044,25 @@ func (r callRuntime) EmitOutput(ctx context.Context, output string) {
 	r.c.em.EmitToolCallOutput(r.c.tc.ID, r.c.tool, output, r.c.a.Name())
 }
 
+// RunTool reports a nested invocation without recording a model-facing response.
+func (r callRuntime) RunTool(ctx context.Context, tc tools.ToolCall, tool tools.Tool) (*tools.ToolCallResult, error) {
+	c := &call{
+		d: r.c.d, sess: r.c.sess, em: r.c.em, a: r.c.a,
+		tc: tc, tool: tool, available: true, outOfBand: true,
+	}
+	c.em.EmitToolCall(tc, tool, c.a.Name())
+	result, err := tool.Handler(ctx, tc, callRuntime{c})
+	response := tools.ToolCallResult{}
+	if err != nil {
+		response = *tools.ResultError(err.Error())
+	} else if result != nil {
+		response = *result
+	}
+	response.Output = c.applyToolResponseTransform(ctx, response.Output, response.IsError)
+	c.em.EmitToolCallResponse(tc.ID, tool, &response, response.Output, c.a.Name())
+	return result, err
+}
+
 func (r callRuntime) Recall(ctx context.Context, message string) error {
 	if r.c.d.Recall == nil {
 		return tools.ErrRecallNotSupported

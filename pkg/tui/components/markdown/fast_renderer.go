@@ -306,6 +306,17 @@ func (r *FastRenderer) Render(input string) (string, error) {
 	return out, err
 }
 
+// RenderCodeBlock renders literal code without interpreting Markdown fences.
+func (r *FastRenderer) RenderCodeBlock(code, language string) string {
+	p := parserPool.Get().(*parser)
+	p.reset("", r.width)
+	p.hideCopyIcon = true
+	p.renderCodeBlock(sanitizeForTerminal(code), language)
+	result := finalizeOutput(p.out.String(), r.width)
+	parserPool.Put(p)
+	return result
+}
+
 // RenderWithCodeBlocks renders markdown content and returns both the styled
 // terminal output and the list of fenced code blocks emitted, in document
 // order. Each entry's Line points at the rendered line that carries the

@@ -149,6 +149,7 @@ See [Provider Credentials](../../providers/overview/index.md#provider-credential
 
 | Variable                            | Description                                                                                          |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `DOCKER_AGENT_DATA_DIR`             | Override the data directory (default: `~/.cagent`), including sessions and prompt history. The `--data-dir` flag takes precedence. |
 | `DOCKER_AGENT_DEFAULT_MODEL`        | Default model used when none is specified, in `provider/model` form (e.g. `openai/gpt-5`).      |
 | `DOCKER_AGENT_MODELS_GATEWAY`       | Route model traffic through a gateway. Equivalent to the `--models-gateway` flag.                    |
 | `DOCKER_AGENT_HIDE_TELEMETRY_BANNER`| Set to `1` to suppress the first-run telemetry notice.                                               |
@@ -160,7 +161,7 @@ See [Provider Credentials](../../providers/overview/index.md#provider-credential
 > [!NOTE]
 > **Legacy `CAGENT_*` aliases**
 >
-> The same variables are also accepted with the legacy `CAGENT_` prefix (e.g. `CAGENT_DEFAULT_MODEL`, `CAGENT_MODELS_GATEWAY`, `CAGENT_HIDE_TELEMETRY_BANNER`) for backward compatibility. `DOCKER_AGENT_DISABLE_DESKTOP_PROXY` is the exception: it has no legacy `CAGENT_*` alias. Prefer the `DOCKER_AGENT_*` form in new setups.
+> The same variables are also accepted with the legacy `CAGENT_` prefix (e.g. `CAGENT_DEFAULT_MODEL`, `CAGENT_MODELS_GATEWAY`, `CAGENT_HIDE_TELEMETRY_BANNER`) for backward compatibility. `DOCKER_AGENT_DATA_DIR` and `DOCKER_AGENT_DISABLE_DESKTOP_PROXY` are exceptions: they have no legacy `CAGENT_*` aliases. Prefer the `DOCKER_AGENT_*` form in new setups.
 
 > [!IMPORTANT]
 > Model references are case-sensitive: `openai/gpt-5` is not the same as `openai/GPT-5`.

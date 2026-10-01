@@ -131,6 +131,8 @@ func TestIsolateState_PromptHistory(t *testing.T) {
 		reloaded, err := history.New("")
 		require.NoError(t, err)
 		require.Equal(t, []string{"test prompt"}, reloaded.Messages)
+		require.FileExists(t, filepath.Join(paths.GetDataDir(), "history"))
+		require.NoDirExists(t, filepath.Join(paths.GetHomeDir(), ".cagent"))
 	})
 
 	require.Equal(t, home, paths.GetHomeDir())

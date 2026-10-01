@@ -409,6 +409,7 @@ docker agent run --sandbox --no-kit agent.yaml
 > - Only the working directory, the agent config directory, and (when staged) the kit directory are mounted; other host files are not visible to the agent.
 > - Network egress is constrained by the sandbox backend's default-deny policy plus the per-run allowlist described above.
 
-Explicit local `--data-dir` and `--cache-dir` overrides are forwarded only when
+Explicit local `--data-dir` (or `DOCKER_AGENT_DATA_DIR`) and `--cache-dir`
+overrides are forwarded only when
 inside the writable workspace; paths outside it are rejected rather than silently
 using a different session database or exposing another host directory.

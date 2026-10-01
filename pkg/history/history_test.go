@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/internal/portcullistest"
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestNew(t *testing.T) {
@@ -20,8 +21,92 @@ func TestNew(t *testing.T) {
 	h, err := New("")
 	require.NoError(t, err)
 
+	assert.Equal(t, filepath.Join(home, ".cagent", "history"), h.path)
 	assert.Equal(t, 0, h.current)
 	assert.Empty(t, h.Messages)
+}
+
+func TestNew_FollowsDataDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	homeDataDir := filepath.Join(home, ".cagent")
+	require.NoError(t, os.MkdirAll(homeDataDir, 0o700))
+	homeHistory := filepath.Join(homeDataDir, "history")
+	homeLegacy := filepath.Join(homeDataDir, "history.json")
+	require.NoError(t, os.WriteFile(homeHistory, []byte("\"home prompt\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(homeLegacy, []byte(`{"messages":["legacy home prompt"]}`), 0o600))
+
+	dir := filepath.Join(t.TempDir(), "data")
+	paths.SetDataDir(dir)
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	h, err := New("")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "history"), h.path)
+	assert.Empty(t, h.Messages)
+	require.NoError(t, h.Add("custom prompt"))
+
+	reloaded, err := New("")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"custom prompt"}, reloaded.Messages)
+	assert.Equal(t, 1, reloaded.current)
+	assert.NoDirExists(t, filepath.Join(dir, ".cagent"))
+
+	data, err := os.ReadFile(homeHistory)
+	require.NoError(t, err)
+	assert.Equal(t, "\"home prompt\"\n", string(data))
+	data, err = os.ReadFile(homeLegacy)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"messages":["legacy home prompt"]}`, string(data))
+}
+
+func TestNew_MigratesOldFormatInDataDir(t *testing.T) {
+	dir := t.TempDir()
+	paths.SetDataDir(dir)
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	oldPath := filepath.Join(dir, "history.json")
+	require.NoError(t, os.WriteFile(oldPath, []byte(`{"messages":["legacy prompt"]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "history"), []byte("\"existing prompt\"\n"), 0o600))
+
+	h, err := New("")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"existing prompt", "legacy prompt"}, h.Messages)
+	assert.NoFileExists(t, oldPath)
+
+	reloaded, err := New("")
+	require.NoError(t, err)
+	assert.Equal(t, h.Messages, reloaded.Messages)
+}
+
+func TestNew_ExplicitDirectoryWins(t *testing.T) {
+	dataDir := t.TempDir()
+	paths.SetDataDir(dataDir)
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	for _, tt := range []struct {
+		name string
+		new  func(string) (*History, error)
+		sub  string
+	}{
+		{name: "New", new: New, sub: ".cagent"},
+		{name: "NewAtDir", new: NewAtDir},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			h, err := tt.new(dir)
+			require.NoError(t, err)
+			require.NoError(t, h.Add("explicit prompt"))
+			assert.FileExists(t, filepath.Join(dir, tt.sub, "history"))
+
+			reloaded, err := tt.new(dir)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"explicit prompt"}, reloaded.Messages)
+			assert.NoFileExists(t, filepath.Join(dataDir, "history"))
+		})
+	}
 }
 
 func TestHistory_AddAndSave(t *testing.T) {

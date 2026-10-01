@@ -688,14 +688,28 @@ func sandboxTTY(cmd *cobra.Command) bool {
 func sandboxStateDirs(cmd *cobra.Command, wd string) ([]string, error) {
 	var args []string
 	for _, name := range []string{"data-dir", "cache-dir"} {
-		flag := cmd.Flags().Lookup(name)
-		if flag == nil || !flag.Changed {
+		flag := cmd.Flag(name)
+		if flag == nil || (!flag.Changed && name != "data-dir") {
 			continue
 		}
-		if strings.TrimSpace(flag.Value.String()) == "" {
+		value := flag.Value.String()
+		if flag.Changed && strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("--%s must not be empty in sandbox mode", name)
 		}
-		dir, err := sandbox.CanonicalPath(flag.Value.String())
+		if name == "data-dir" {
+			var err error
+			value, err = resolveDataDir(value)
+			if err != nil {
+				return nil, fmt.Errorf("resolving --%s: %w", name, err)
+			}
+		}
+		if value == "" {
+			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("--%s must not be empty in sandbox mode", name)
+		}
+		dir, err := sandbox.CanonicalPath(value)
 		if err != nil {
 			return nil, fmt.Errorf("resolving --%s: %w", name, err)
 		}

@@ -22,11 +22,14 @@ Sessions live in a SQLite database, `session.db`, under the [data directory](../
 $ ls ~/.cagent/session.db
 ```
 
-Override the location with `-s`/`--session-db`, or by overriding the data directory itself with `--data-dir`:
+Override the location with `-s`/`--session-db`, or by overriding the data directory itself with `--data-dir` or `DOCKER_AGENT_DATA_DIR` (`--data-dir` takes precedence):
 
 ```bash
 # Use a project-local session database instead of the global one
 $ docker agent run agent.yaml --session-db ./sessions.db
+
+# Store sessions and prompt history under a custom data directory
+$ DOCKER_AGENT_DATA_DIR=/path/to/data docker agent run agent.yaml
 ```
 
 ## Generated Media Files

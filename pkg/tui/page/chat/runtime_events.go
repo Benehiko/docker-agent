@@ -159,6 +159,9 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 	case *runtime.AgentSwitchingEvent:
 		return true, p.handleAgentSwitching(msg)
 
+	case *runtime.AgentRouteEvent:
+		return true, notification.InfoCmd(routeSummary(msg))
+
 	case *runtime.ToolsetInfoEvent:
 		p.sidebar.SetSkillsInfo(len(p.app.CurrentAgentSkills()))
 		return true, p.forwardToSidebar(msg)
@@ -618,4 +621,17 @@ func isSuccessfulStop(reason string) bool {
 	default:
 		return false
 	}
+}
+
+// routeSummary is the one-line, task-free description of a routing transition.
+func routeSummary(e *runtime.AgentRouteEvent) string {
+	summary := fmt.Sprintf("Routing %s → %s", e.FromAgent, e.ToAgent)
+	if e.Selected != "" {
+		summary += " (" + e.Selected
+		if e.Probability != nil {
+			summary += fmt.Sprintf(" %.0f%%", *e.Probability*100)
+		}
+		summary += ")"
+	}
+	return summary
 }

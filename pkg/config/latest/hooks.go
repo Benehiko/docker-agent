@@ -77,8 +77,14 @@ func (h *HooksConfig) Validate() error {
 		}
 		for i, matcher := range matchers {
 			for _, hook := range matcher.Hooks {
-				if hook.Type == "evaluator" && event != "tool_guard" {
-					return fmt.Errorf("hooks.%s: evaluator hooks are only supported on tool_guard", event)
+				if err := validateEvaluatorPlacement(event, contract, hook); err != nil {
+					return err
+				}
+				if contract.Control && hook.Type == "model" {
+					return fmt.Errorf("hooks.%s: model hooks cannot select routes; use a command or choice evaluator", event)
+				}
+				if hook.RoutingPolicy != nil && !contract.Control {
+					return fmt.Errorf("hooks.%s: routing_policy is only supported on before_agent_run and after_agent_complete", event)
 				}
 			}
 			if contract.ToolMatched {
@@ -93,6 +99,25 @@ func (h *HooksConfig) Validate() error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateEvaluatorPlacement(event string, contract events.Contract, hook HookDefinition) error {
+	if hook.Type != "evaluator" {
+		return nil
+	}
+	switch {
+	case contract.Control:
+		if hook.EvaluatorPolicy != nil {
+			return fmt.Errorf("hooks.%s: evaluator hooks on this event use routing_policy, not evaluator_policy", event)
+		}
+	case event == "tool_guard":
+		if hook.RoutingPolicy != nil {
+			return fmt.Errorf("hooks.%s: evaluator hooks on tool_guard use evaluator_policy, not routing_policy", event)
+		}
+	default:
+		return fmt.Errorf("hooks.%s: evaluator hooks are only supported on tool_guard, before_agent_run, and after_agent_complete", event)
 	}
 	return nil
 }

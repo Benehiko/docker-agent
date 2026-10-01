@@ -111,6 +111,7 @@ func (s *Session) Clone() *Session {
 		AgentName:               s.AgentName,
 		allowAgentHandoffs:      s.allowAgentHandoffs,
 		handoffAgent:            s.handoffAgent,
+		routed:                  s.routed,
 		ParentID:                s.ParentID,
 		DelegationLineage:       cloneStringSlice(s.DelegationLineage),
 		InstructionContext:      cloneInstructionContext(s.InstructionContext),

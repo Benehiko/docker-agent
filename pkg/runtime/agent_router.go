@@ -69,11 +69,17 @@ func (r *agentRouter) Current() *agent.Agent {
 	return a
 }
 
-// ResolveSession returns the agent for sess: when sess pins a specific
+// ResolveSession returns the agent for sess: a hook-routed session's selected
+// agent wins; otherwise, when sess pins a specific
 // agent (e.g. background agent tasks), that agent is returned directly
 // instead of reading the shared current-agent field; otherwise Current
 // is returned.
 func (r *agentRouter) ResolveSession(sess *session.Session) *agent.Agent {
+	if name := sess.RouteAgent(); name != "" {
+		if a, err := r.team.Agent(name); err == nil {
+			return a
+		}
+	}
 	if name := sess.HandoffAgent(); name != "" {
 		if a, err := r.team.Agent(name); err == nil {
 			return a

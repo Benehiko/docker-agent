@@ -610,6 +610,18 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			}
 			agent.WithForceHandoff(targets[0])(a)
 		}
+
+		if agentConfig.Routing != nil {
+			for _, name := range agentConfig.Routing.AllowedAgents {
+				if _, exists := agentsByName[name]; !exists {
+					return nil, fmt.Errorf("agent '%s': routing.allowed_agents references unknown local agent '%s'", agentConfig.Name, name)
+				}
+			}
+			agent.WithRouting(agent.Routing{
+				AllowedAgents: agentConfig.Routing.AllowedAgents,
+				DefaultAgent:  agentConfig.Routing.DefaultAgent,
+			})(a)
+		}
 	}
 
 	// Create permissions checker from config

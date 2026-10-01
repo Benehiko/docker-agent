@@ -86,6 +86,16 @@ func (r *LocalRuntime) appendSteerAndEmit(sess *session.Session, sm QueuedMessag
 // Returns drained=true with messageCountBefore set when any messages
 // were drained and emitted; otherwise drained=false.
 func (r *LocalRuntime) drainAndEmitSteered(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) steerResult {
+	// A routed invocation keeps later input queued until its boundary, so
+	// the steered text cannot change the assessment already made.
+	if sess.Routed() {
+		return steerResult{}
+	}
+	return r.drainSteeredQueue(ctx, sess, a, events)
+}
+
+// drainSteeredQueue unconditionally moves queued steering messages into the session.
+func (r *LocalRuntime) drainSteeredQueue(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) steerResult {
 	steered := r.steerQueue.Drain(ctx)
 	if len(steered) == 0 {
 		return steerResult{}
@@ -107,6 +117,15 @@ func (r *LocalRuntime) drainAndEmitSteered(ctx context.Context, sess *session.Se
 		stopMsg:            stopMsg,
 		contextMsgs:        ctxMsgs,
 	}
+}
+
+// drainSteeredQueueAtBoundary drains the steering queue where an invocation
+// ends; routed conversations only ever drain here.
+func (r *LocalRuntime) drainSteeredQueueAtBoundary(ctx context.Context, sess *session.Session, a *agent.Agent, ls *loopState, events EventSink) steerResult {
+	if ls.route != nil {
+		return r.drainSteeredQueue(ctx, sess, a, events)
+	}
+	return r.drainAndEmitSteered(ctx, sess, a, events)
 }
 
 // steerResult is the outcome of a drainAndEmitSteered call: whether any
@@ -366,7 +385,20 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	defer r.subscribePlanChanges(sess, sink)()
 	defer r.subscribeToolsetEvents(sess, sink)()
 
+	// Routed conversations restart at the entry agent and let before_agent_run
+	// pick the agent that actually runs, before anything is prepared for it.
+	route := r.beginRouting(sess)
 	a := r.resolveSessionAgent(sess)
+	var stop *routeStop
+	if route != nil {
+		a, stop = r.activateAgent(ctx, sess, a, route, sink)
+	} else {
+		stop = r.routingUnsupported(route, a)
+	}
+	if stop != nil {
+		streamReason = r.stopRouting(ctx, sess, a, stop, sink)
+		return
+	}
 
 	// session_start fires once per RunStream. Its AdditionalContext
 	// (typically the AddEnvironmentInfo env block) is held as transient
@@ -380,6 +412,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		sessionStartMsgs:       sessionStart.messages,
 		sessionStartLegacyMsgs: sessionStart.legacyMessages(),
 		sessionStartSources:    sessionStart.sources,
+		route:                  route,
 	}
 
 	// Emit team information
@@ -460,7 +493,19 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// implemented as the cache_response stop-hook builtin (see
 	// runtime/cache.go and getHooksExecutor).
 	if r.tryReplayCachedResponse(ctx, sess, a, sink) {
-		return
+		if ls.route == nil {
+			return
+		}
+		// A replayed answer is a completion like any other: it may still route onward.
+		outcome, stop := r.routeCompletion(ctx, sess, a, sess.GetLastAssistantMessageContent(), ls, sink)
+		switch outcome {
+		case routeStopped:
+			streamReason = r.stopRouting(ctx, sess, a, stop, sink)
+			return
+		case routeFinished:
+			return
+		case routeContinued:
+		}
 	}
 
 	// Initialize consecutive duplicate tool call detector.
@@ -497,6 +542,15 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		r.runQueuedCompaction(ctx, liveEntry)
 
 		a = r.resolveSessionAgent(sess)
+		if ls.route != nil {
+			a, stop = r.activateAgent(ctx, sess, a, ls.route, sink)
+		} else {
+			stop = r.routingUnsupported(ls.route, a)
+		}
+		if stop != nil {
+			streamReason = r.stopRouting(ctx, sess, a, stop, sink)
+			return
+		}
 
 		// Clear per-tool model override on agent switch so it doesn't
 		// leak from one agent's toolset into another agent's turn. Also
@@ -690,6 +744,8 @@ type loopState struct {
 	prevTurnMadeToolCalls bool
 	// idleRetry is shared by every turn and fallback attempt in this child run.
 	idleRetry *idleStreamRetryAllowance
+	// route is non-nil only for hook-routed conversations.
+	route *routeState
 }
 
 // emptyTurnWarning classifies an empty assistant turn (no content, no tool
@@ -1103,19 +1159,34 @@ func (r *LocalRuntime) runTurn(
 		slog.DebugContext(ctx, "Conversation stopped", "agent", a.Name())
 		r.executeStopHooks(ctx, sess, a, res.Content, events)
 
-		// --- FORCED HANDOFF: deterministic routing on natural stop ---
-		// When the agent's config names a force_handoff target, the
-		// runtime intercepts the finish state and routes the conversation
-		// to that agent without involving the LLM. Hard-pinned background
-		// tasks stay put; skill forks route handoffs within their own session.
-		if next := a.ForceHandoff(); next != nil && (sess.AgentName == "" || sess.AllowsAgentHandoffs()) {
+		// --- ROUTED COMPLETION: after_agent_complete or forced handoff ---
+		// Routed conversations decide continuation here, for every
+		// successful completion, with session-local agent switching.
+		if ls.route != nil {
+			outcome, stop := r.routeCompletion(ctx, sess, a, res.Content, ls, events)
+			switch outcome {
+			case routeStopped:
+				endReason = r.stopRouting(ctx, sess, a, stop, events)
+				return turnExit
+			case routeContinued:
+				endReason = turnEndReasonContinue
+				return turnContinue
+			case routeFinished:
+			}
+		} else if next := a.ForceHandoff(); next != nil && (sess.AgentName == "" || sess.AllowsAgentHandoffs()) {
+			// --- FORCED HANDOFF: deterministic routing on natural stop ---
+			// When the agent's config names a force_handoff target, the
+			// runtime intercepts the finish state and routes the conversation
+			// to that agent without involving the LLM. Hard-pinned background
+			// tasks stay put; skill forks route handoffs within their own session.
 			r.applyForceHandoff(ctx, sess, a, next)
 			endReason = turnEndReasonForceHandoff
 			return turnContinue
 		}
 
 		// Re-check steer queue: closes the race between the mid-loop drain and this stop.
-		if sr := r.drainAndEmitSteered(ctx, sess, a, events); sr.drained {
+		// Routed conversations defer it to this boundary and start a new invocation.
+		if sr := r.drainSteeredQueueAtBoundary(ctx, sess, a, ls, events); sr.drained {
 			if sr.stop {
 				slog.WarnContext(ctx, "user_steering_messages_submit hook signalled run termination",
 					"agent", a.Name(), "session_id", sess.ID, "reason", sr.stopMsg)
@@ -1124,6 +1195,7 @@ func (r *LocalRuntime) runTurn(
 				return turnExit
 			}
 			ls.userPromptMsgs = sr.contextMsgs
+			r.restartRouting(sess, ls)
 			r.compactIfNeeded(ctx, sess, a, contextLimit, messageCountBeforeTools, events)
 			endReason = turnEndReasonSteered
 			return turnContinue
@@ -1149,6 +1221,7 @@ func (r *LocalRuntime) runTurn(
 				return turnExit
 			}
 			ls.userPromptMsgs = ctxMsgs
+			r.restartRouting(sess, ls)
 			r.compactIfNeeded(ctx, sess, a, contextLimit, messageCountBeforeTools, events)
 			endReason = turnEndReasonContinue
 			return turnContinue // re-enter the loop for a new turn

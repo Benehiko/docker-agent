@@ -60,6 +60,9 @@ func validateOutput(event EventType, out *Output, strict bool) error {
 	default:
 		return fmt.Errorf("invalid permission_decision %q: expected allow, ask, or deny", hso.PermissionDecision)
 	}
+	if err := validateTransition(c, hso.Transition); err != nil {
+		return err
+	}
 	if !strict {
 		return nil
 	}
@@ -80,6 +83,25 @@ func validateOutput(event EventType, out *Output, strict bool) error {
 		if field.present && !field.supported {
 			return fmt.Errorf("%s does not support %s", c.Name, field.name)
 		}
+	}
+	return nil
+}
+
+// validateTransition rejects transitions on non-control events regardless of
+// strictness and malformed ones on control events. Targets are authorized by
+// the runtime, which owns the agent's routing allowlist.
+func validateTransition(c events.Contract, t *Transition) error {
+	if t == nil {
+		return nil
+	}
+	if !c.Control {
+		return fmt.Errorf("%s does not support transition", c.Name)
+	}
+	if t.Action != TransitionActionRoute {
+		return fmt.Errorf("invalid transition action %q: expected %s", t.Action, TransitionActionRoute)
+	}
+	if strings.TrimSpace(t.Agent) == "" {
+		return errors.New("route transition requires an agent")
 	}
 	return nil
 }

@@ -91,6 +91,8 @@ func MergeHooks(base, cli *latest.HooksConfig) *latest.HooksConfig {
 		ToolResponseTransform:      slices.Concat(base.ToolResponseTransform, cli.ToolResponseTransform),
 		ToolInputTransform:         slices.Concat(base.ToolInputTransform, cli.ToolInputTransform),
 		ToolGuard:                  slices.Concat(base.ToolGuard, cli.ToolGuard),
+		BeforeAgentRun:             slices.Concat(base.BeforeAgentRun, cli.BeforeAgentRun),
+		AfterAgentComplete:         slices.Concat(base.AfterAgentComplete, cli.AfterAgentComplete),
 		WorktreeCreate:             slices.Concat(base.WorktreeCreate, cli.WorktreeCreate),
 	}
 	return merged

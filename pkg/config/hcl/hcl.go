@@ -197,6 +197,8 @@ var blockRules = map[string]blockRule{
 	"tool_response_transform": {mode: modeList, outKey: "tool_response_transform"},
 	"tool_input_transform":    {mode: modeList, outKey: "tool_input_transform"},
 	"tool_guard":              {mode: modeList, outKey: "tool_guard"},
+	"before_agent_run":        {mode: modeList, outKey: "before_agent_run"},
+	"after_agent_complete":    {mode: modeList, outKey: "after_agent_complete"},
 }
 
 // lookupRule returns the conversion rule for a block, falling back to a

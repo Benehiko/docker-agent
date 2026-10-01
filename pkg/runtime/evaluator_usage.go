@@ -44,7 +44,7 @@ func (e *accountedEvaluator) Evaluate(ctx context.Context, state any) (*evaluato
 		return nil, err
 	}
 	if breach := accounting.r.currentBudget().exceededFor(accounting.a.Name()); breach != nil {
-		return nil, errors.New(breach.Message())
+		return nil, &evaluator.TerminalError{Err: errors.New(breach.Message())}
 	}
 
 	started := accounting.r.now()
@@ -71,10 +71,10 @@ func (e *accountedEvaluator) Evaluate(ctx context.Context, state any) (*evaluato
 		observe(record)
 	}
 	if invalid {
-		return nil, errors.New("evaluator reported invalid accounting")
+		return nil, &evaluator.TerminalError{Err: errors.New("evaluator reported invalid accounting")}
 	}
 	if breach := accounting.r.currentBudget().exceededFor(accounting.a.Name()); breach != nil {
-		return nil, errors.New(breach.Message())
+		return nil, &evaluator.TerminalError{Err: errors.New(breach.Message())}
 	}
 	return result, err
 }

@@ -781,6 +781,10 @@ func configWithFlatHook(ev EventType, h Hook) *Config {
 		cfg.BeforeCompaction = []Hook{h}
 	case EventAfterCompaction:
 		cfg.AfterCompaction = []Hook{h}
+	case EventBeforeAgentRun:
+		cfg.BeforeAgentRun = []Hook{h}
+	case EventAfterAgentComplete:
+		cfg.AfterAgentComplete = []Hook{h}
 	}
 	return cfg
 }

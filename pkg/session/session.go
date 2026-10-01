@@ -432,6 +432,11 @@ type Session struct {
 	allowAgentHandoffs bool
 	handoffAgent       string
 
+	// Hook-routed conversations switch agents per session, never through the
+	// shared runtime agent, so the shared entry agent survives every request.
+	routed     bool
+	routeAgent string
+
 	// ParentID indicates this is a sub-session created by task transfer.
 	// Sub-sessions are not persisted as standalone entries; they are embedded
 	// within the parent session's Messages array.
@@ -1653,6 +1658,58 @@ func (s *Session) TryAgentHandoff(name string) bool {
 	}
 	s.handoffAgent = name
 	return true
+}
+
+// VisibleExchanges returns the user-visible conversation, oldest first: real user
+// messages and assistant replies that are final (no tool calls). System messages,
+// tool transcripts, implicit messages, and sub-session contents are excluded.
+func (s *Session) VisibleExchanges() []chat.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []chat.Message
+	for _, item := range s.Messages {
+		if !item.IsMessage() || item.Message.Implicit {
+			continue
+		}
+		msg := item.Message.Message
+		if strings.TrimSpace(msg.Content) == "" || len(msg.ToolCalls) > 0 {
+			continue
+		}
+		if msg.Role != chat.MessageRoleUser && msg.Role != chat.MessageRoleAssistant {
+			continue
+		}
+		out = append(out, chat.Message{Role: msg.Role, Content: msg.Content})
+	}
+	return out
+}
+
+// Routed reports whether hook routing owns this session's active agent.
+func (s *Session) Routed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.routed
+}
+
+// SetRouted opts the session into hook routing for its lifetime.
+func (s *Session) SetRouted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routed = true
+}
+
+// RouteAgent returns the session-local agent selected by routing, or "" when
+// the conversation is at its entry agent.
+func (s *Session) RouteAgent() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.routeAgent
+}
+
+// SetRouteAgent selects the session-local active agent; "" returns to the entry agent.
+func (s *Session) SetRouteAgent(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routeAgent = name
 }
 
 // WithAgentName pins this session to a specific agent. When set, RunStream

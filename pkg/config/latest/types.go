@@ -728,6 +728,9 @@ type AgentConfig struct {
 	// strict pipelines reliable. The full conversation context carries
 	// over to the target agent.
 	ForceHandoff string `json:"force_handoff,omitempty" yaml:"force_handoff,omitempty"`
+	// Routing declares which agents this agent's before_agent_run and
+	// after_agent_complete hooks may route to.
+	Routing *AgentRouting `json:"routing,omitempty" yaml:"routing,omitempty"`
 
 	AddDate            bool `json:"add_date,omitempty"`
 	AddEnvironmentInfo bool `json:"add_environment_info,omitempty"`
@@ -2837,6 +2840,19 @@ type HooksConfig struct {
 	// rejected here because the event always preempts approval.
 	ToolGuard HookMatcherConfigs `json:"tool_guard,omitempty" yaml:"tool_guard,omitempty"`
 
+	// BeforeAgentRun hooks run once per agent activation, before the agent's
+	// model is selected or its response cache is consulted. The hook may
+	// return a route transition to replace the activation with another agent
+	// from the agent's routing allowlist. At most one hook is allowed.
+	BeforeAgentRun HookDefinitions `json:"before_agent_run,omitempty" yaml:"before_agent_run,omitempty"`
+
+	// AfterAgentComplete hooks run once after an agent completes
+	// successfully, before the run decides whether it has finished. The hook
+	// may return a route transition to continue the same conversation with
+	// another agent from the routing allowlist. At most one hook is allowed,
+	// and it cannot be combined with force_handoff.
+	AfterAgentComplete HookDefinitions `json:"after_agent_complete,omitempty" yaml:"after_agent_complete,omitempty"`
+
 	// WorktreeCreate hooks run once, just after `docker agent run
 	// --worktree` creates a git worktree and before the session starts.
 	// They execute inside the new worktree (their working directory is
@@ -2945,7 +2961,9 @@ type HookDefinition struct {
 	//                 add_prompt_files, redact_secrets (see also the
 	//                 redact_secrets agent flag), and several others
 	//                 documented in pkg/hooks/builtins.
-	//   - "evaluator": assess tool input using a named evaluator and a separate policy.
+	//   - "evaluator": assess tool input (tool_guard) or agent work
+	//                 (before_agent_run, after_agent_complete) using a named
+	//                 evaluator and a separate policy.
 	//   - "model":    ask an LLM and translate its reply into the hook's
 	//                 native output. See Model / Prompt / Schema. Used to
 	//                 implement "LLM as a judge" pre_tool_use hooks,
@@ -2955,6 +2973,9 @@ type HookDefinition struct {
 	// Evaluator references a top-level assessment used by a tool_guard hook.
 	Evaluator       string           `json:"evaluator,omitempty" yaml:"evaluator,omitempty"`
 	EvaluatorPolicy *EvaluatorPolicy `json:"evaluator_policy,omitempty" yaml:"evaluator_policy,omitempty"`
+	// RoutingPolicy maps a choice evaluator's outcomes to agents on
+	// before_agent_run and after_agent_complete hooks.
+	RoutingPolicy *RoutingPolicy `json:"routing_policy,omitempty" yaml:"routing_policy,omitempty"`
 
 	// Command is the shell command (Type==command) or the builtin name
 	// (Type==builtin) to invoke.
@@ -3061,7 +3082,7 @@ func (h *HookDefinition) validate(prefix string, index int) error {
 		return fmt.Errorf("hooks.%s[%d]: type is required", prefix, index)
 	}
 
-	if h.Type != "evaluator" && (h.Evaluator != "" || h.EvaluatorPolicy != nil) {
+	if h.Type != "evaluator" && (h.Evaluator != "" || h.EvaluatorPolicy != nil || h.RoutingPolicy != nil) {
 		return fmt.Errorf("hooks.%s[%d]: evaluator fields require type evaluator", prefix, index)
 	}
 	switch h.Type {
@@ -3077,7 +3098,14 @@ func (h *HookDefinition) validate(prefix string, index int) error {
 		if strings.TrimSpace(h.Evaluator) == "" {
 			return fmt.Errorf("hooks.%s[%d]: evaluator is required", prefix, index)
 		}
-		if err := h.EvaluatorPolicy.Validate(); err != nil {
+		if h.EvaluatorPolicy != nil && h.RoutingPolicy != nil {
+			return fmt.Errorf("hooks.%s[%d]: evaluator_policy and routing_policy are mutually exclusive", prefix, index)
+		}
+		if h.RoutingPolicy != nil {
+			if err := h.RoutingPolicy.Validate(); err != nil {
+				return fmt.Errorf("hooks.%s[%d]: %w", prefix, index, err)
+			}
+		} else if err := h.EvaluatorPolicy.Validate(); err != nil {
 			return fmt.Errorf("hooks.%s[%d]: %w", prefix, index, err)
 		}
 	case "model":

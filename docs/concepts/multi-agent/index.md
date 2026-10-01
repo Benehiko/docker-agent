@@ -170,6 +170,17 @@ Rules enforced at config load time:
 
 See [`examples/force_handoff.yaml`](https://github.com/docker/docker-agent/blob/main/examples/force_handoff.yaml) for a runnable example.
 
+### Hook-Driven Routing
+
+When the next agent depends on the request or on the previous agent's answer,
+`before_agent_run` and `after_agent_complete` [hooks](../../configuration/hooks/index.md#agent-routing-hooks)
+can choose it — with a command or a choice [evaluator](../../configuration/evaluators/index.md) — instead
+of a coordinator's LLM call. The runtime validates each choice against the agent's
+`routing.allowed_agents`, switches agents in the same conversation (earlier transcripts
+stay visible), and starts every new user request at the entry agent again. Combine it with
+`force_handoff` for fixed continuations such as `researcher -> reviewer`. See
+[`examples/hook_routing.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing.yaml).
+
 ## Parallel Delegation with Background Agents
 
 `transfer_task` is **sequential** — the coordinator waits for the sub-agent to finish before continuing. When you need to fan out work to multiple agents at the same time, use the `background_agents` toolset instead.

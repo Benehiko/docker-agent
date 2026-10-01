@@ -2,6 +2,7 @@ package agent
 
 import (
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -157,6 +158,14 @@ func WithHandoffs(handoffs ...*Agent) Opt {
 func WithForceHandoff(target *Agent) Opt {
 	return func(a *Agent) {
 		a.forceHandoff = target
+	}
+}
+
+// WithRouting sets the agents the agent's control hooks may route to.
+func WithRouting(routing Routing) Opt {
+	return func(a *Agent) {
+		routing.AllowedAgents = slices.Clone(routing.AllowedAgents)
+		a.routing = routing
 	}
 }
 

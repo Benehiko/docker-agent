@@ -72,6 +72,7 @@ func TestStrictOutputContractCapabilities(t *testing.T) {
 				{"context", NewAdditionalContextOutput(EventType(c.Name), "context"), c.Context},
 				{"metadata", &Output{HookSpecificOutput: &HookSpecificOutput{Metadata: map[string]string{}}}, c.Metadata},
 				{"summary", &Output{HookSpecificOutput: &HookSpecificOutput{Summary: "summary"}}, c.Summary},
+				{"transition", &Output{HookSpecificOutput: &HookSpecificOutput{Transition: &Transition{Action: TransitionActionRoute, Agent: "next"}}}, c.Control},
 			} {
 				err := validateOutput(EventType(c.Name), tc.out, true)
 				if tc.allowed {

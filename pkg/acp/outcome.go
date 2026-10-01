@@ -41,7 +41,7 @@ func (o *promptOutcome) observe(event runtime.Event) {
 		case runtime.ErrorCodeModelError, runtime.ErrorCodeRateLimited,
 			runtime.ErrorCodeContextExceeded, runtime.ErrorCodeRequestTooLarge, runtime.ErrorCodeMediaTooLarge,
 			runtime.ErrorCodeToolFailed, runtime.ErrorCodeHookBlocked, runtime.ErrorCodeLoopDetected,
-			runtime.ErrorCodeStructuredOutputFailed:
+			runtime.ErrorCodeStructuredOutputFailed, runtime.ErrorCodeRoutingFailed:
 			o.fatal = runtimePromptError(o.sessionID, e.Code, e.Error)
 		}
 	case *runtime.BudgetExceededEvent:

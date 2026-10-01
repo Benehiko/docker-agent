@@ -63,6 +63,8 @@ Docker Agent dispatches the following hook events:
 | `on_session_resume`         | When the user explicitly approves continuation past `max_iterations`              | No         |
 | `on_tool_approval_decision` | After the runtime's approval chain (permissions / yolo / readonly / ask) resolves | No         |
 | `worktree_create`           | After `docker agent run --worktree` creates a git worktree, before the session     | Yes        |
+| `before_agent_run`          | Once per agent activation, before its model runs — can [route](#agent-routing-hooks) to another agent | Yes |
+| `after_agent_complete`      | Once after an agent completes successfully — can [route](#agent-routing-hooks) onward | Yes |
 
 > [!NOTE]
 > **Two compaction events**
@@ -111,6 +113,8 @@ collects metadata, and does not rewrite input.
 | `tool_input_transform` | sequential | yes | warn | no | tool input |
 | `tool_guard` | parallel | yes | block | no | — |
 | `worktree_create` | parallel | yes | warn | yes | — |
+| `before_agent_run` | parallel | yes | block | no | — |
+| `after_agent_complete` | parallel | yes | block | no | — |
 | `skill_content_guard` | parallel | yes | block | no | — |
 | `prompt_file_guard` | parallel | yes | block | no | — |
 
@@ -440,7 +444,9 @@ In addition to the common fields, each event ships its own payload:
 | `notification`              | `notification_level` (`error` or `warning`), `notification_message`                                                   |
 | `on_error`                  | `notification_level` (always `error`), `notification_message`                                                         |
 | `on_max_iterations`         | `notification_level` (always `warning`), `notification_message`                                                       |
-| `on_agent_switch`           | `from_agent`, `to_agent`, `agent_switch_kind` (`transfer_task`, `transfer_task_return`, `handoff`, or `force_handoff`)                 |
+| `on_agent_switch`           | `from_agent`, `to_agent`, `agent_switch_kind` (`transfer_task`, `transfer_task_return`, `handoff`, `force_handoff`, or `route`)                 |
+| `before_agent_run`          | `agent_name`, `invocation_id`, `step_id`, `input`, `previous_output`, `conversation`                                  |
+| `after_agent_complete`      | `agent_name`, `invocation_id`, `step_id`, `input`, `previous_output`, `output`, `conversation`                        |
 | `on_session_resume`         | `previous_max_iterations`, `new_max_iterations`                                                                       |
 | `on_tool_approval_decision` | `tool_name`, `tool_use_id`, `tool_input`, `approval_decision`, `approval_source`                                      |
 | `worktree_create`           | `worktree_path`, `worktree_branch`, `worktree_source_dir` (`cwd` is also set to the new worktree)                     |
@@ -968,7 +974,7 @@ The `reason` field classifies the exit:
 
 ### Agent-Switch and Session-Resume: observability for multi-agent and long runs
 
-`on_agent_switch` fires whenever the runtime moves the active agent to a new one — `transfer_task`, `handoff`, `force_handoff`, or the return after a transferred task completes. The cause is in `agent_switch_kind`, the source and destination in `from_agent` and `to_agent`. Use it for audit, transcript, and metrics pipelines that track which agent ran which tools.
+`on_agent_switch` fires whenever the runtime moves the active agent to a new one — `transfer_task`, `handoff`, `force_handoff`, a hook `route`, or the return after a transferred task completes. The cause is in `agent_switch_kind`, the source and destination in `from_agent` and `to_agent`. Use it for audit, transcript, and metrics pipelines that track which agent ran which tools.
 
 The built-in [`unload`](#available-built-ins) hooks into this event to release the resources held by the previous agent's models. It's the canonical way to run two heavy local models on a GPU that can only fit one at a time:
 
@@ -1233,6 +1239,168 @@ $ docker agent run myorg/coder \
 > **Merging behavior**
 >
 > Agent-config, global, drop-in, and CLI hooks are additive. For each event, configuration order is: agent-config hooks first, then global hooks from `settings.hooks`, then [hook drop-ins](#hook-drop-in-files-hooksd) from `hooks.d/`, then CLI hooks. Transformation pipelines execute in this order; concurrent events aggregate results in this order. No source replaces another, and individual agents cannot opt out of global hooks.
+
+## Agent routing hooks
+
+`before_agent_run` and `after_agent_complete` are **control events**: a hook can
+choose the next agent, and the runtime validates and executes the switch. No LLM
+`transfer_task` or `handoff` call is involved, and an agent that is routed away
+from never calls its own model. Routing continues in the **same conversation**:
+every agent sees the earlier transcript. Isolated steps, nested calls, parallel
+branches and retries are not supported.
+
+```text
+                     +-- quick -------------------+
+request -> evaluator +-- specialist --------------+-> final answer
+                     +-- researcher -> reviewer --+
+                     +-- clarifier ---------------+
+```
+
+```yaml
+agents:
+  root:
+    model: openai/gpt-5-mini
+    routing:
+      allowed_agents: [quick, specialist, researcher, clarifier]
+      default_agent: clarifier          # required for evaluator selectors
+    hooks:
+      before_agent_run:
+        - type: evaluator
+          evaluator: task_route         # a top-level choice evaluator
+          routing_policy:
+            routes: {simple: quick, complex: specialist, research: researcher, unclear: clarifier}
+            min_probability: 0.85
+```
+
+See [`examples/hook_routing.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing.yaml)
+(evaluator selector with `researcher → reviewer` continuation via `force_handoff`) and
+[`examples/hook_routing_command.yaml`](https://github.com/docker/docker-agent/blob/main/examples/hook_routing_command.yaml)
+(offline command selector).
+
+### When the events fire
+
+- `before_agent_run` fires **once per agent activation**, before the runtime
+  selects the agent's model or replays its response cache. A route replaces the
+  activation: the skipped agent makes no model call and its `after_agent_complete`
+  hook never runs. Each destination starts its own activation and may run its own
+  `before_agent_run` once. Model and tool iterations inside an activation do not
+  re-fire it.
+- `after_agent_complete` fires **once after a successful completion** — natural
+  completion, accepted structured output, or a cached answer — before the run
+  decides whether it is finished. It does not fire on errors, cancellation,
+  budget stops, iteration-limit pauses, incomplete structured output, or empty
+  completions, and a failed or empty step never continues to another agent.
+- Every new user request starts again at the entry agent (the agent you started
+  with or selected explicitly, not necessarily `root`). Input sent while a routed
+  invocation is running stays queued and starts a new invocation at the entry
+  agent when the current one ends. Routing switches the agent for that session
+  only and never changes the shared entry agent.
+- The existing observational events (`stop`, `subagent_stop`, `on_agent_switch`) are
+  unchanged. `on_agent_switch` reports routes with `agent_switch_kind: route`.
+- Intermediate answers may already have streamed to the user before a completion
+  hook reviews them; completion routing does not retract them.
+
+### Input and output
+
+Control hooks receive the usual fields plus a runtime-owned task context. The
+runtime preserves `input` for the whole invocation and updates `previous_output` only
+after a step completes successfully.
+
+```json
+{
+  "session_id": "session-123",
+  "invocation_id": "request-456",
+  "step_id": "step-2",
+  "agent_name": "researcher",
+  "input": "Original user request",
+  "previous_output": "Previous completed step, if any",
+  "output": "Current completion (after_agent_complete only)",
+  "conversation": [{"role": "user", "content": "Earlier visible turn"}]
+}
+```
+
+`conversation` holds up to the last 10 visible prior user and final assistant
+messages (no system messages, tool transcripts, or sub-session contents), so
+follow-ups can be assessed in context. Treat every one of these values as
+untrusted task data, never as policy.
+
+A hook selects the next agent with:
+
+```json
+{"hook_specific_output": {"transition": {"action": "route", "agent": "reviewer"}}}
+```
+
+- Empty output (or exit code 0 with no JSON) is an intentional no-op: the current
+  activation runs, or finishes normally.
+- Blocking output (`decision: block`, `continue: false`, exit code 2) terminates
+  the run with its reason, and **blocking beats any transition**. `continue: true`
+  is not a request for another turn.
+- Output is **always validated strictly**, regardless of `strict_output`: unknown
+  actions, missing targets, unknown fields, non-JSON output and transitions on
+  other events are errors. Only `route` exists; there is no retry, call, return or
+  fabricated final response. `hook_specific_output.metadata` is carried into the
+  route event.
+- Hook crashes, timeouts, malformed output and targets outside
+  `routing.allowed_agents` **fail closed**: the run stops with an error and the
+  wrong agent never continues.
+
+### Configuration rules
+
+Checked when the configuration loads, after global and drop-in hooks are merged:
+
+- An agent with `before_agent_run` or `after_agent_complete` hooks needs `routing`,
+  and `routing` needs at least one of these hooks. Inherited routing hooks are
+  never dropped silently; they fail validation on agents without `routing`.
+- **At most one selector per event** on an agent after identical definitions are
+  de-duplicated. Different selectors are an error; completion order never decides.
+- `routing.allowed_agents` lists declared local agents (no self, no duplicates, no
+  harness agents, no external references). `default_agent` must be one of them.
+- `after_agent_complete` cannot be combined with `force_handoff` on the same agent.
+  Use `force_handoff` for unconditional continuation.
+- Statically possible routes and `force_handoff` edges must not form a cycle, and the
+  runtime stops an invocation after 100 transitions regardless.
+- Hook types `command`, `builtin` and `evaluator` are supported. `model` hooks
+  cannot select routes.
+- In HCL write `routing = { allowed_agents = [...] }` as an attribute; a `routing { }` block
+  means model routing rules and is rejected for agents.
+
+Routing needs the native run loop. Pinned sub-sessions (transferred tasks, background
+agents, skill forks), harness agents, and the experimental WASM runtime do not support
+it and report an error instead of ignoring the hooks; embedders using
+`teamloader.WithStrict` must enable `config.FeatureAgentRouting`. A route grants no
+tool permission: tool guards, permission rules, approval dialogs and non-interactive
+denials apply to the destination exactly as before.
+
+### Evaluator selectors
+
+`type: evaluator` hooks on control events apply a `routing_policy` to a
+[`choice` evaluator](../evaluators/index.md). The evaluator's own `instructions`
+and `choices` are sent exactly as written; the routing policy, not the prompt, maps
+each outcome to an agent and sets the threshold.
+
+- `routes` must map **every** evaluator choice to an allowed agent (missing or
+  unknown keys are configuration errors). Choice labels need not equal agent names,
+  so different consumers can map the same assessment to different actions.
+- The evaluator receives only `input`, `previous_output`, `output` and `conversation`
+  — no session or invocation IDs, system prompts or tool transcripts.
+- The runtime validates the whole probability distribution: exactly the expected
+  keys, finite values in `[0, 1]`, a total within 0.001 of 1, and a selected choice
+  that is uniquely highest. A selected probability at or above `min_probability`
+  routes through `routes`.
+- **Ties, low probability, unknown or invalid answers, and evaluator transport or
+  provider failures** route to `routing.default_agent` and emit a warning with a
+  fallback reason (never raw provider errors or task text).
+- **Cancellation, budget exhaustion and invalid usage accounting are terminal**: they
+  stop the run and never use the default agent.
+- Every evaluator attempt, including invalid answers, is charged once to the session
+  budget; the budget is checked before and after each assessment and before the next
+  agent starts.
+- `tool_guard` evaluator hooks are unchanged: evaluator failures still block the
+  guarded tool.
+
+Route events (`agent_route`) carry the invocation and step IDs, source and
+destination agents, evaluator, selected outcome, probability, returned model and any
+fallback reason. The TUI shows a one-line notice per route.
 
 ## Skill content guard
 

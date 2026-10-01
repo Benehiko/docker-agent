@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -317,12 +318,16 @@ func mergeExcludedTools(parent, child []string) []string {
 // Use as `defer r.swapCurrentAgent(ctx, sessionID, from, to, evts)()` so the
 // swap takes effect immediately and the restore runs at function exit.
 func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, from, to *agent.Agent, evts EventSink) func() {
+	// Restore the shared agent the conversation actually had, not the caller:
+	// a hook-routed caller runs on a session-local agent, and writing it back
+	// would replace the conversation's entry agent.
+	shared := r.currentAgentName()
 	evts.Emit(AgentSwitching(true, from.Name(), to.Name()))
 	r.executeOnAgentSwitchHooks(ctx, from, sessionID, from.Name(), to.Name(), agentSwitchKindTransferTask)
 	r.setCurrentAgent(to.Name())
 	evts.Emit(AgentInfo(to.Name(), agentModelLabel(ctx, to), to.Description(), to.WelcomeMessage()))
 	return func() {
-		r.setCurrentAgent(from.Name())
+		r.setCurrentAgent(cmp.Or(shared, from.Name()))
 		evts.Emit(AgentSwitching(false, to.Name(), from.Name()))
 		r.executeOnAgentSwitchHooks(ctx, from, sessionID, to.Name(), from.Name(), agentSwitchKindTransferTaskReturn)
 		evts.Emit(AgentInfo(from.Name(), agentModelLabel(ctx, from), from.Description(), from.WelcomeMessage()))
@@ -786,9 +791,7 @@ func (r *LocalRuntime) handleHandoff(ctx context.Context, sess *session.Session,
 	defer span.End()
 
 	r.executeOnAgentSwitchHooks(ctx, currentAgent, sess.ID, ca, next.Name(), agentSwitchKindHandoff)
-	if !sess.TryAgentHandoff(next.Name()) && sess.AgentName == "" {
-		r.setCurrentAgent(next.Name())
-	}
+	r.switchSessionAgent(sess, next.Name())
 	handoffMessage := "The agent " + ca + " handed off the conversation to you. " +
 		"Your available handoff agents and tools are specified in the system messages that follow. " +
 		"Only use those capabilities - do not attempt to use tools or hand off to agents that you see " +
@@ -812,19 +815,18 @@ func (r *LocalRuntime) applyForceHandoff(ctx context.Context, sess *session.Sess
 	slog.InfoContext(ctx, "Forced handoff", "from_agent", from.Name(), "to_agent", to.Name(), "session_id", sess.ID)
 
 	r.executeOnAgentSwitchHooks(ctx, from, sess.ID, from.Name(), to.Name(), agentSwitchKindForceHandoff)
-	if !sess.TryAgentHandoff(to.Name()) && sess.AgentName == "" {
-		r.setCurrentAgent(to.Name())
-	}
+	r.switchSessionAgent(sess, to.Name())
+	sess.AddMessage(session.ImplicitUserMessage(forcedHandoffNote(from.Name())))
+}
 
-	sess.AddMessage(session.ImplicitUserMessage(
-		"The agent " + from.Name() + " finished its response and the conversation was automatically " +
-			"handed off to you. Your available handoff agents and tools are specified in the system " +
-			"messages that follow. Only use those capabilities - do not attempt to use tools or hand " +
-			"off to agents that you see in the conversation history from previous agents, as those were " +
-			"available to different agents with different capabilities. Look at the conversation history " +
-			"for context, continue the work from where the previous agent stopped, and complete your " +
-			"part of the task.",
-	))
+func forcedHandoffNote(from string) string {
+	return "The agent " + from + " finished its response and the conversation was automatically " +
+		"handed off to you. Your available handoff agents and tools are specified in the system " +
+		"messages that follow. Only use those capabilities - do not attempt to use tools or hand " +
+		"off to agents that you see in the conversation history from previous agents, as those were " +
+		"available to different agents with different capabilities. Look at the conversation history " +
+		"for context, continue the work from where the previous agent stopped, and complete your " +
+		"part of the task."
 }
 
 // Preserve accounting during cancellation drains, including nested children.

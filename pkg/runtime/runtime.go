@@ -810,7 +810,7 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 			return nil, false
 		}
 		return &accountedEvaluator{client: client, name: name}, true
-	}))
+	}, hooks.WithRoutingDefaults(r.routingDefaultAgent)))
 
 	// cache_response is registered here (not in pkg/hooks/builtins)
 	// because it needs to capture the runtime to resolve the agent

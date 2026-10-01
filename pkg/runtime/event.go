@@ -261,6 +261,7 @@ const (
 	ErrorCodeHookBlocked            = "hook_blocked"
 	ErrorCodeLoopDetected           = "loop_detected"
 	ErrorCodeStructuredOutputFailed = "structured_output_failed"
+	ErrorCodeRoutingFailed          = "routing_failed"
 )
 
 type ErrorEvent struct {

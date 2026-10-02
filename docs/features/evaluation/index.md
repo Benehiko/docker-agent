@@ -28,6 +28,9 @@ $ docker agent eval agent.yaml
 # Specify a custom evals directory
 $ docker agent eval agent.yaml ./my-evals
 
+# Evaluate a model or guideline flavor directly
+$ docker agent eval agent.yaml --flavor candidate
+
 # Run with 8 concurrent evaluations
 $ docker agent eval agent.yaml -c 8
 
@@ -156,6 +159,8 @@ Each assertion has a `name` (shown in results), a `type`, and a `value` checked 
 | `cost_threshold` | the eval's cost is less than or equal to `value` (a dollar amount)   |
 | `tool_called`    | the agent called a tool named `value`                                |
 
+Tool-mode structured output is scored using the final assistant answer, not the output tool arguments or an earlier rejected attempt. The accepted JSON is also preserved in saved sessions and the relevance transcript. For ordinary text-only runs, text assertions inspect the concatenated assistant output.
+
 ## Scoring Metrics
 
 Docker Agent evaluates agents across four dimensions:
@@ -222,6 +227,7 @@ $ docker agent eval <agent-file>|<registry-ref> [<eval-dir>|./evals]
 | `--container-runtime` | `docker`                  | Container runtime executable for building and running evaluations (e.g. `podman`) |
 | `--keep-containers` | `false`                     | Keep containers after evaluation (don't remove with `--rm`)       |
 | `-e, --env`         | (none)                      | Environment variables to pass to container (`KEY` or `KEY=VALUE`) |
+| `--flavor`          | (none)                      | Config patches applied in order inside each eval container; repeatable |
 | `--repeat`          | `1`                         | Number of times to repeat each evaluation (useful for computing baselines) |
 | `--baseline`        | (none)                      | Compare against a previously saved run JSON and exit non-zero on regression (see [Regression gate](#regression-gate)) |
 | `--regression-tolerance` | `0`                    | How far an aggregate quality rate may fall before `--baseline` reports a regression (0–1) |
@@ -310,7 +316,7 @@ Your base image therefore only needs to provide the runtime environment: languag
 After a run completes, Docker Agent produces:
 
 - **Console summary** — Pass/fail status per eval with metric breakdowns
-- **JSON results** — Full structured results for programmatic analysis
+- **JSON results** — Full structured results for programmatic analysis, including selected flavors in application order
 - **SQLite database** — Complete sessions for detailed investigation and debugging
 - **Sessions JSON** — Exported session data for analysis
 - **Log file** — Debug-level log of the entire evaluation run

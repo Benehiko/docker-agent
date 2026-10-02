@@ -77,6 +77,7 @@ func Evaluate(ctx context.Context, ttyOut, out io.Writer, isTTY bool, runName st
 	startTime := time.Now()
 	results, err := runner.Run(ctx, ttyOut, out, isTTY)
 	duration := time.Since(startTime)
+	cfg.Flavors = slices.Clone(runConfig.Flavors)
 
 	summary := computeSummary(results)
 	summary.RepeatMetrics = computeRepeatMetrics(results, cfg.Repeat)
@@ -476,10 +477,12 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 
 	if setup != "" {
 		// Run setup script, then docker agent run --exec with the original arguments.
-		args = append(args, "sh", "-c", "sh /setup.sh && exec /docker-agent run --exec --yolo --json \"$@\"", "--", "/configs/"+agentFile)
-	} else {
-		args = append(args, "/configs/"+agentFile)
+		args = append(args, "sh", "-c", "sh /setup.sh && exec /docker-agent run --exec --yolo --json \"$@\"", "--")
 	}
+	for _, flavor := range r.runConfig.Flavors {
+		args = append(args, "--flavor", flavor)
+	}
+	args = append(args, "--", "/configs/"+agentFile)
 	args = append(args, questions...)
 
 	containerRuntime := r.containerRuntimeOrDefault()
@@ -552,6 +555,7 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 
 func parseContainerEvents(events []map[string]any) (response string, cost float64, outputTokens int64, toolCalls []string) {
 	var responseBuf strings.Builder
+	outputs := acceptedStructuredOutputs(events)
 	for _, event := range events {
 		eventType, _ := event["type"].(string)
 
@@ -582,7 +586,13 @@ func parseContainerEvents(events []map[string]any) (response string, cost float6
 		}
 	}
 
-	return responseBuf.String(), cost, outputTokens, toolCalls
+	response = responseBuf.String()
+	if len(outputs) > 0 {
+		// Structured results are terminal messages, not streamed text. Use
+		// the last answer, including a later handoff or conversational turn.
+		response = SessionFromEvents(events, "", nil).GetLastAssistantMessageContent()
+	}
+	return response, cost, outputTokens, toolCalls
 }
 
 // buildTranscript creates a chronological transcript of agent interactions.
@@ -603,7 +613,8 @@ func buildTranscript(events []map[string]any) string {
 		pendingText.Reset()
 	}
 
-	for _, event := range events {
+	outputs := acceptedStructuredOutputs(events)
+	for index, event := range events {
 		switch event["type"] {
 		case "agent_choice":
 			if agentName, _ := event["agent_name"].(string); agentName != "" {
@@ -633,6 +644,10 @@ func buildTranscript(events []map[string]any) string {
 				response = response[:500] + "...(truncated)"
 			}
 			fmt.Fprintf(&transcript, "[Tool %q returns: %s]\n\n", name, response)
+			if output, ok := outputs[index]; ok {
+				agentName, _ := event["agent_name"].(string)
+				fmt.Fprintf(&transcript, "[Agent %s final answer]:\n%s\n\n", cmp.Or(agentName, "unknown"), output)
+			}
 
 		case "budget_exceeded":
 			// A budget stop is a structured termination, never an error. The

@@ -146,7 +146,8 @@ func SessionFromEvents(events []map[string]any, title string, questions []string
 		pendingItems = nil
 	}
 
-	for _, event := range events {
+	outputs := acceptedStructuredOutputs(events)
+	for index, event := range events {
 		eventType, _ := event["type"].(string)
 		eventTimestamp := parseEventTimestamp(event)
 
@@ -222,7 +223,17 @@ func SessionFromEvents(events []map[string]any, title string, questions []string
 					CreatedAt:  eventTimestamp,
 				},
 			}
+			if result, ok := event["result"].(map[string]any); ok {
+				msg.Message.IsError, _ = result["isError"].(bool)
+			}
 			pendingItems = append(pendingItems, session.Item{Message: msg})
+			if output, ok := outputs[index]; ok {
+				flushAssistantMessage()
+				agentName, _ := event["agent_name"].(string)
+				sess.AddMessage(&session.Message{AgentName: agentName, Message: chat.Message{
+					Role: chat.MessageRoleAssistant, Content: output, CreatedAt: eventTimestamp,
+				}})
+			}
 
 		case "evaluation_usage":
 			data, err := json.Marshal(event["evaluation"])
@@ -477,6 +488,7 @@ func SaveRunSessionsJSON(run *EvalRun, outputDir string) (string, error) {
 		Duration:  run.Duration.Round(time.Millisecond).String(),
 		Config: RunOutputConfig{
 			Agent:            run.Config.AgentFilename,
+			Flavors:          run.Config.Flavors,
 			JudgeModel:       run.Config.JudgeModel,
 			Concurrency:      run.Config.Concurrency,
 			EvalsDir:         run.Config.EvalsDir,

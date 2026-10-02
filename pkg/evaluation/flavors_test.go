@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,9 @@ import (
 )
 
 func TestEvalContainerForwardsOrderedFlavors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake container runtime executable is a POSIX shell script")
+	}
 	t.Parallel()
 
 	for _, setup := range []string{"", "echo setup"} {

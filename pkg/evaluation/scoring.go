@@ -114,6 +114,7 @@ func printSummary(out io.Writer, summary Summary, duration time.Duration) {
 		fmt.Fprintf(out, "\n  Repeat metrics (k=%d, %d unique evals):\n", rm.K, rm.Total)
 		fmt.Fprintf(out, "   pass@%d: %.1f%% (passed at least once)\n", rm.K, rm.PassK*100)
 		fmt.Fprintf(out, "   pass^%d: %.1f%% (passed every time)\n", rm.K, rm.HatK*100)
+		printRepeatDiagnostics(out, rm.Evals)
 	}
 
 	fmt.Fprintf(out, "\nTotal Cost: $%.6f\n", summary.TotalCost)
@@ -194,5 +195,6 @@ func computeRepeatMetrics(results []Result, k int) *RepeatMetrics {
 		PassK: float64(anyPass) / float64(total),
 		HatK:  float64(allPass) / float64(total),
 		Total: total,
+		Evals: computeRepeatDiagnostics(results, k),
 	}
 }

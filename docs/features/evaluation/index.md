@@ -190,7 +190,41 @@ regular summary:
    pass^5: 66.7% (passed every time)
 ```
 
-These metrics are also included in the JSON results (`repeat_metrics`) and,
+The summary also groups repetitions by source eval file and prints:
+
+- **Stability counts and a per-eval table** — pass counts (`3/5`), execution
+  error counts, and status: `stable` (all pass), `flaky` (mixed pass/fail),
+  `failing` (none pass), or `incomplete` (fewer than `k` observed results).
+  Flaky evals appear first, followed by failing, incomplete, and stable evals.
+- **Failed repetition titles** — identify the individual runs to inspect in
+  the earlier output or saved sessions.
+- **Cost spread** — median, minimum, maximum, and sample count per eval,
+  excluding repetitions with execution errors. Failed quality checks still
+  contribute cost samples.
+- **High-cost outliers** — repetitions costing strictly more than **2× their
+  eval's median**, when there are at least three non-error samples and the
+  median is positive. This is a heuristic, not a statistical significance test;
+  zero or unreported prices do not trigger outlier flags.
+
+```console
+  Stability: 1 stable, 1 flaky, 1 failing, 0 incomplete
+  EVAL           STATUS   PASSED  ERRORS  COST MEDIAN [MIN, MAX]
+  evals/b.json   flaky    3/5     0       $0.010000 [$0.010000, $0.090000] (n=5)
+  evals/c.json   failing  0/5     5       n/a
+  evals/a.json   stable   5/5     0       $0.020000 [$0.018000, $0.022000] (n=5)
+  Failed repetitions (evals/b.json): B #2, B #4
+  Failed repetitions (evals/c.json): C #1, C #2, C #3, C #4, C #5
+
+  Cost outliers (>2x per-eval median; at least 3 non-error runs):
+   B #4 (evals/b.json): $0.090000 (9.0x median)
+```
+
+Per-eval diagnostics are included in the JSON results under
+`summary.repeat_metrics.evals`. They are informational only: they do not change
+pass/fail rules or the regression gate. Individual timing distributions are
+not reported; `Total Time` remains the run's wall-clock duration.
+
+Repeat metrics are also included in the JSON results (`repeat_metrics`) and,
 when comparing against a `--baseline`, are reported as informational deltas
 (see [Regression gate](#regression-gate)).
 

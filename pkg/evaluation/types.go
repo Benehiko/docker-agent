@@ -200,10 +200,37 @@ const DefaultContainerRuntime = "docker"
 //   - pass^k: fraction of unique evaluations that passed every repetition
 //     ("all pass"). Measures determinism / reliability.
 type RepeatMetrics struct {
-	K     int     `json:"k"`
-	PassK float64 `json:"pass_at_k"`  // any-pass rate
-	HatK  float64 `json:"pass_hat_k"` // all-pass rate
-	Total int     `json:"total"`      // number of unique evaluations
+	K     int                 `json:"k"`
+	PassK float64             `json:"pass_at_k"`  // any-pass rate
+	HatK  float64             `json:"pass_hat_k"` // all-pass rate
+	Total int                 `json:"total"`      // number of unique evaluations
+	Evals []RepeatEvalMetrics `json:"evals,omitempty"`
+}
+
+// RepeatEvalMetrics describes the observed stability of one source evaluation.
+type RepeatEvalMetrics struct {
+	InputPath  string             `json:"input_path"`
+	Status     string             `json:"status"`
+	Passed     int                `json:"passed"`
+	Total      int                `json:"total"`
+	Errors     int                `json:"errors"`
+	FailedRuns []string           `json:"failed_runs,omitempty"`
+	Cost       *RepeatCostMetrics `json:"cost,omitempty"`
+}
+
+// RepeatCostMetrics summarizes costs from repetitions without execution errors.
+type RepeatCostMetrics struct {
+	Samples  int                 `json:"samples"`
+	Median   float64             `json:"median"`
+	Min      float64             `json:"min"`
+	Max      float64             `json:"max"`
+	Outliers []RepeatCostOutlier `json:"outliers,omitempty"`
+}
+
+// RepeatCostOutlier identifies a repetition costing more than twice its eval's median.
+type RepeatCostOutlier struct {
+	Title string  `json:"title"`
+	Cost  float64 `json:"cost"`
 }
 
 // containerRuntimeOrDefault returns the container runtime executable to

@@ -101,12 +101,25 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/skills`          | List skills available to the current agent                                           |
 | `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`). Press <kbd>Tab</kbd> after `/toolset-restart` and a space to complete a toolset name; non-restartable toolsets are shown dimmed and cannot be selected. |
 | `/permissions`     | Inspect and edit tool permission rules                                               |
-| `/speak`           | Voice input via system speech-to-text (macOS only)                                   |
+| `/speak`           | Voice input via OpenAI's Realtime API (macOS only; requires `OPENAI_API_KEY`)           |
 | `/exit`            | Exit the application (aliases: `/quit`, `/q`)                                        |
 
 Slash commands (both built-in and named) execute immediately when entered. Regular chat messages sent while the agent is working are steered into the ongoing stream by default: the agent picks them up mid-turn (they appear in the transcript at the point the agent sees them) without breaking the stream. Prefer the previous end-of-turn behavior? Switch **While agent is working** to `Queue` on the **Behavior** tab of `/settings`; queued messages are processed in order once the stream stops.
 
 Agent-defined commands (prompts, URL links, agent-switching shortcuts) are configured under `commands:` in the agent YAML — see [Custom Commands](../../configuration/commands/index.md) for the full reference, including how to hide commands with `--disable-commands`.
+
+### Voice Input (`/speak`)
+
+In the full TUI on macOS, `/speak` captures microphone audio and sends it directly to OpenAI's Realtime API for transcription. It is not local or system-provided speech recognition. Its provider, endpoint, and API key are not selected from your chat model's configuration.
+
+Docker's models gateway currently does **not** support `/speak`. Even when your chat uses the gateway, voice input requires a separate OpenAI API key set in the `OPENAI_API_KEY` environment variable **before starting Docker Agent**:
+
+```bash
+export OPENAI_API_KEY=your_openai_api_key
+docker agent run agent.yaml
+```
+
+Run `/speak` to start voice input. Press <kbd>Enter</kbd> to stop and send the transcribed message, or <kbd>Escape</kbd> to stop without sending it.
 
 ### Plans Sidebar
 

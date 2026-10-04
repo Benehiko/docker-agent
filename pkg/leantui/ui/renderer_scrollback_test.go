@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,31 @@ func (s *scrollbackScreen) write(output string) {
 		}
 		output = output[1:]
 	}
+}
+
+func TestRendererStreamingWrappedParagraphDoesNotDuplicateLines(t *testing.T) {
+	t.Parallel()
+	r, buf := newTestRenderer(5)
+	screen := scrollbackScreen{rows: make([]string, 5)}
+	text := "For the personal-agent model you have built, B should not automatically invoke either agent inside A's active thread. Give B a private explanation and a way to start their own conversation."
+	var content string
+	for word := range strings.FieldsSeq(text) {
+		if content != "" {
+			content += " "
+		}
+		content += word
+		lines := RenderAssistantLines(content, 80)
+		lines = append(lines, "", "input", "", "footer")
+		r.Frame(lines, len(lines)-3, 0)
+		screen.write(buf.String())
+		buf.Reset()
+	}
+	var expected []string
+	for _, line := range RenderAssistantLines(text, 80) {
+		expected = append(expected, ansi.Strip(line))
+	}
+	actual := append(slices.Clone(screen.history), screen.rows...)
+	require.Equal(t, append(expected, "", "input", "", "footer"), actual)
 }
 
 func TestRendererRepeatedOffscreenChangesDoNotReplayUnchangedAnswers(t *testing.T) {

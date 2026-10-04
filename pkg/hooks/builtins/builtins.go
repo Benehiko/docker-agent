@@ -14,6 +14,7 @@
 //   - add_directory_listing (session_start)   — top-level entries of cwd
 //   - add_user_info         (session_start)   — current OS user and host
 //   - add_recent_commits    (session_start)   — `git log --oneline -n N`
+//   - transform_json         (tool_response_transform) — keep selected JSON fields
 //   - max_iterations        (before_llm_call) — hard stop after N model calls
 //   - unload                (on_agent_switch) — release the previous
 //     agent's local-engine resources via HTTP unload (DMR today)
@@ -107,6 +108,7 @@ func Register(r *hooks.Registry, opts ...Option) error {
 
 	return errors.Join(
 		r.RegisterBuiltin(AddContext, addContext),
+		r.RegisterBuiltin(TransformJSON, transformJSON),
 		r.RegisterBuiltin(AddDate, addDate),
 		r.RegisterBuiltin(AddEnvironmentInfo, addEnvironmentInfo),
 		r.RegisterBuiltin(AddPromptFiles, addPromptFiles),

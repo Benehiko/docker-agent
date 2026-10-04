@@ -55,6 +55,24 @@ func TestRunEarlyReturnCancelsAndDrainsStream(t *testing.T) {
 		wantErr  string
 	}{
 		{
+			name:     "last error",
+			cfg:      Config{Last: true},
+			triggers: []runtime.Event{runtime.Error("model failed")},
+			wantErr:  "model failed",
+		},
+		{
+			name:     "last max iterations without auto approval",
+			cfg:      Config{Last: true},
+			triggers: repeatMaxIterEvents(1),
+			wantErr:  "max iterations",
+		},
+		{
+			name:     "last max iterations cap",
+			cfg:      Config{Last: true, AutoApprove: true},
+			triggers: repeatMaxIterEvents(maxAutoExtensions + 1),
+			wantErr:  "max iterations",
+		},
+		{
 			name:     "json error",
 			cfg:      Config{OutputJSON: true},
 			triggers: []runtime.Event{runtime.Error("model failed")},

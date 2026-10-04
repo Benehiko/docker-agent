@@ -1,6 +1,7 @@
 package dmr
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -231,4 +232,26 @@ func TestPullSelectedConnectionDoesNotRecoverLocalPartial(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "unrelated download", string(data))
 	}
+}
+
+func TestAutomaticPullOutputCanBeRedirected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell Docker shim")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$2\" = inspect ] && exit 1\nprintf 'download progress\\n'\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old; _ = r.Close() })
+	var diagnostics bytes.Buffer
+	ctx := WithPullOutput(t.Context(), &diagnostics)
+	require.NoError(t, pullDockerModelIfNeeded(ctx, "ai/test"))
+	assert.Contains(t, diagnostics.String(), "Pulling model ai/test")
+	assert.Contains(t, diagnostics.String(), "download progress")
+	assert.Contains(t, diagnostics.String(), "pulled successfully")
 }

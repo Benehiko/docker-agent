@@ -61,6 +61,15 @@ Two independent things make an `--exec` run's output easy to parse: how the tran
 $ docker agent run --exec agent.yaml --json "List the 5 largest files in this repo" | jq -c 'select(.type == "agent_choice")'
 ```
 
+**`--last`** skips the transcript and prints only the final agent answer after all turns finish, without thinking, tool calls/results, or intermediate responses:
+
+```bash
+$ docker agent run --exec --last agent.yaml "Generate a report"
+$ docker agent run --exec --last --json agent.yaml "Generate a report" > report.json
+```
+
+With `--last --json`, a structured JSON answer is emitted directly as a JSON value; a plain-text answer is encoded as a JSON string. Without `--json`, the answer is printed as text. This works with both native and tool-mode structured output. Failed runs do not print partial answers. Like `--json`, `--last` declines pending tool confirmations and elicitations instead of prompting; configure an unattended safety policy or permission allow-list for tool use.
+
 **`structured_output`** constrains the *model's own response* to a JSON schema you define on the agent, independent of `--json`. Use it when downstream code needs the model's answer in a predictable shape (a list of findings, a classification, …) rather than free-form prose. See [Structured Output](../../configuration/structured-output/index.md) for the full field reference — combine it with `--json` in `--exec` to get both a parseable transcript and a schema-validated final answer.
 
 ## Reacting to Events

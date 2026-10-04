@@ -13,6 +13,7 @@ type Autocomplete struct {
 	base        []Command
 	all         []Command
 	files       []completion.Item
+	models      []Command
 	matches     []Command
 	selected    int
 	scopePrefix string
@@ -26,6 +27,7 @@ const (
 	autocompleteCommands autocompleteMode = iota
 	autocompleteScoped
 	autocompleteFiles
+	autocompleteModels
 )
 
 func NewAutocomplete() *Autocomplete {
@@ -36,6 +38,10 @@ func (a *Autocomplete) SetCommands(cmds []Command) {
 	a.base = cmds
 	a.all = cmds
 	a.scopePrefix = ""
+}
+
+func (a *Autocomplete) SetModels(models []Command) {
+	a.models = models
 }
 
 func (a *Autocomplete) SetFiles(files []completion.Item) {
@@ -71,10 +77,22 @@ func (a *Autocomplete) Sync(input string) bool {
 		a.mode = autocompleteScoped
 		query = strings.TrimPrefix(input, prefix)
 		a.matches = FilterScopedCommands(a.all, query)
-	case strings.HasPrefix(input, "/") && !strings.ContainsAny(input, " \n"):
+	case a.mode == autocompleteModels && strings.HasPrefix(input, "/") && input != "/" && !strings.HasPrefix(input, "/model ") && !strings.Contains(input, "\n"):
+		a.matches = FilterScopedCommands(a.models, input[1:])
+	case strings.HasPrefix(input, "/") && !strings.Contains(input, "\n"):
+		a.all = a.base
+		a.scopePrefix = ""
 		a.mode = autocompleteCommands
 		query = input[1:]
-		a.matches = FilterCommands(a.all, query)
+		command, _, hasArgs := strings.Cut(query, " ")
+		a.matches = FilterCommands(a.base, command)
+		if len(a.matches) == 0 && len(a.models) > 0 {
+			a.mode = autocompleteModels
+			a.matches = FilterScopedCommands(a.models, query)
+		} else if hasArgs {
+			a.deactivate()
+			return false
+		}
 	default:
 		a.deactivate()
 		return false
@@ -124,6 +142,7 @@ func (a *Autocomplete) Dismiss() {
 }
 
 func (a *Autocomplete) deactivate() {
+	a.mode = autocompleteCommands
 	a.Active = false
 	a.matches = nil
 	a.selected = 0
@@ -138,6 +157,9 @@ func (a *Autocomplete) Completion(cmd Command) string {
 	value := cmd.Value
 	if value == "" {
 		value = cmd.Name
+	}
+	if a.mode == autocompleteModels {
+		return "/model " + value
 	}
 	return "/" + a.scopePrefix + value
 }
@@ -155,8 +177,11 @@ func (a *Autocomplete) Render(width int) []string {
 	end := min(start+autocompleteMaxRows, len(a.matches))
 
 	trigger := "/" + a.scopePrefix
-	if a.mode == autocompleteFiles {
+	switch a.mode {
+	case autocompleteFiles:
 		trigger = "@"
+	case autocompleteModels:
+		trigger = "/model "
 	}
 
 	nameWidth := 0

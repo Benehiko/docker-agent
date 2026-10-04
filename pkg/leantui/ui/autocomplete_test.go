@@ -133,3 +133,78 @@ func TestAutocompleteBuiltinsBeforeAgent(t *testing.T) {
 	assert.Equal(t, "plan", last.Name)
 	assert.Equal(t, CmdAgent, last.Kind)
 }
+
+func TestAutocompleteModelFallback(t *testing.T) {
+	t.Parallel()
+	a := NewAutocomplete()
+	a.SetCommands(testCommands())
+	gpt := runtime.ModelChoice{Name: "GPT Five", Ref: "openai/gpt-5", Provider: "openai", Model: "gpt-5"}
+	a.SetModels([]Command{{
+		Name: gpt.Ref,
+		MatchScore: func(query string) (int, bool) {
+			return modelpicker.Score(gpt, query)
+		},
+	}})
+
+	for _, query := range []string{"/gpt", "/openai", "/five"} {
+		require.True(t, a.Sync(query))
+		cmd, ok := a.Current()
+		require.True(t, ok)
+		assert.Equal(t, gpt.Ref, cmd.Name)
+		assert.Equal(t, "/model openai/gpt-5", a.Completion(cmd))
+		assert.Contains(t, a.Render(80)[0], "/model openai/gpt-5")
+	}
+
+	require.True(t, a.Sync("/"))
+	require.True(t, a.Sync("/ne"))
+	cmd, ok := a.Current()
+	require.True(t, ok)
+	assert.Equal(t, "new", cmd.Name)
+	assert.Equal(t, "/new", a.Completion(cmd))
+
+	assert.False(t, a.Sync("/zzzzz"))
+	assert.False(t, a.Sync("hello"))
+}
+
+func TestAutocompleteCommandsAfterLeavingScope(t *testing.T) {
+	t.Parallel()
+	a := NewAutocomplete()
+	a.SetCommands(testCommands())
+	a.SetScopedCommands("model ", []Command{{Name: "openai/gpt-5"}})
+	require.True(t, a.Sync("/model "))
+
+	require.True(t, a.Sync("/ne"))
+	cmd, ok := a.Current()
+	require.True(t, ok)
+	assert.Equal(t, "/new", a.Completion(cmd))
+}
+
+func TestAutocompleteModelSelectionWithSpaces(t *testing.T) {
+	t.Parallel()
+	for _, pasted := range []bool{false, true} {
+		a := NewAutocomplete()
+		a.SetCommands(testCommands())
+		astra := runtime.ModelChoice{Name: "Astra", Ref: "openai/astra", Provider: "openai", Model: "astra"}
+		a.SetModels([]Command{{Name: astra.Ref, MatchScore: func(query string) (int, bool) {
+			return modelpicker.Score(astra, query)
+		}}})
+		if !pasted {
+			require.True(t, a.Sync("/openai"))
+			require.True(t, a.Sync("/openai "))
+		}
+		require.True(t, a.Sync("/openai astra"))
+		cmd, ok := a.Current()
+		require.True(t, ok)
+		assert.Equal(t, "/model openai/astra", a.Completion(cmd))
+
+		assert.False(t, a.Sync("/openai nonexistent"))
+		require.True(t, a.Sync("/openai astra"))
+		a.Sync("/ne")
+		assert.Equal(t, autocompleteModels, a.mode)
+		require.True(t, a.Sync("/"))
+		require.True(t, a.Sync("/ne"))
+		cmd, ok = a.Current()
+		require.True(t, ok)
+		assert.Equal(t, "/new", a.Completion(cmd))
+	}
+}

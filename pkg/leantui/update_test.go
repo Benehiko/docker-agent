@@ -765,3 +765,40 @@ func TestCopyCommandReportsMissingAssistantResponse(t *testing.T) {
 func (r *cycleThinkingRuntime) ReadSkillContent(context.Context, *session.Session, string) (string, error) {
 	return "", nil
 }
+
+func TestSlashModelFallback(t *testing.T) {
+	t.Parallel()
+	for name, key := range map[string]ui.KeyType{"enter": ui.KeyEnter, "tab": ui.KeyTab} {
+		t.Run(name, func(t *testing.T) {
+			rt := &cycleThinkingRuntime{
+				supports: true,
+				models: []runtime.ModelChoice{
+					{Name: "Sonnet", Ref: "anthropic/claude-sonnet-4-6", Provider: "anthropic", Model: "claude-sonnet-4-6"},
+				},
+			}
+			m := bareModel(24)
+			m.app = app.New(t.Context(), rt, session.New())
+			m.refreshCommands(t.Context())
+
+			m.handleKey(t.Context(), ui.Key{Typ: ui.KeyRune, Runes: []rune("/sonnet")})
+			require.True(t, m.screen.Autocomplete.Active)
+			m.handleKey(t.Context(), ui.Key{Typ: key})
+			if key == ui.KeyTab {
+				assert.Equal(t, "/model anthropic/claude-sonnet-4-6 ", m.screen.Editor.Text())
+				m.handleKey(t.Context(), ui.Key{Typ: ui.KeyEnter})
+			}
+			assert.Equal(t, "anthropic/claude-sonnet-4-6", rt.modelRef)
+		})
+	}
+}
+
+func TestSlashModelFallbackDisabled(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{supports: true, models: []runtime.ModelChoice{{Ref: "openai/gpt-5", Model: "gpt-5"}}}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+	m.disabledCommands = map[string]bool{"model": true}
+	m.refreshCommands(t.Context())
+
+	assert.False(t, m.screen.Autocomplete.Sync("/gpt"))
+}

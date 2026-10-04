@@ -566,6 +566,32 @@ func (m *model) loadSessionTranscript(sess *session.Session) {
 	}
 }
 
+func modelCommands(models []runtime.ModelChoice) []ui.Command {
+	cmds := make([]ui.Command, 0, len(models))
+	for _, choice := range models {
+		desc := choice.Name
+		if choice.IsCurrent {
+			desc = strings.TrimSpace(desc + " (current)")
+		} else if choice.IsDefault {
+			desc = strings.TrimSpace(desc + " (default)")
+		}
+		value := choice.Ref
+		if choice.IsDefault {
+			value = "default"
+		}
+		cmds = append(cmds, ui.Command{
+			Name:  choice.Ref,
+			Desc:  desc,
+			Value: value,
+			MatchScore: func(query string) (int, bool) {
+				return modelpicker.Score(choice, query)
+			},
+			Kind: ui.CmdBuiltin,
+		})
+	}
+	return cmds
+}
+
 func (m *model) handleModelCommand(ctx context.Context, modelRef string) {
 	if m.app == nil || !m.app.SupportsModelSwitching() {
 		m.addNotice("", "Model switching is not supported with this runtime", ui.StMuted())
@@ -578,28 +604,7 @@ func (m *model) handleModelCommand(ctx context.Context, modelRef string) {
 			m.addNotice("", "No models available for selection", ui.StMuted())
 			return
 		}
-		cmds := make([]ui.Command, 0, len(models))
-		for _, choice := range models {
-			desc := choice.Name
-			if choice.IsCurrent {
-				desc = strings.TrimSpace(desc + " (current)")
-			} else if choice.IsDefault {
-				desc = strings.TrimSpace(desc + " (default)")
-			}
-			value := choice.Ref
-			if choice.IsDefault {
-				value = "default"
-			}
-			cmds = append(cmds, ui.Command{
-				Name:  choice.Ref,
-				Desc:  desc,
-				Value: value,
-				MatchScore: func(query string) (int, bool) {
-					return modelpicker.Score(choice, query)
-				},
-				Kind: ui.CmdBuiltin,
-			})
-		}
+		cmds := modelCommands(models)
 		m.screen.Autocomplete.SetScopedCommands("model ", cmds)
 		m.screen.Editor.SetText("/model ")
 		m.screen.Autocomplete.Sync(m.screen.Editor.Text())
@@ -737,6 +742,11 @@ func (m *model) refreshCommands(ctx context.Context) {
 		cmds = append(cmds, ui.Command{Name: sk.Name, Desc: sk.Description, Kind: ui.CmdAgent})
 	}
 	m.screen.Autocomplete.SetCommands(cmds)
+	var models []ui.Command
+	if !m.disabledCommands["model"] && m.app.SupportsModelSwitching() {
+		models = modelCommands(m.app.AvailableModels(ctx))
+	}
+	m.screen.Autocomplete.SetModels(models)
 }
 
 func (m *model) handleConfirmKey(k ui.Key) {

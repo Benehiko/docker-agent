@@ -2,6 +2,7 @@ package codemode
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -325,4 +326,14 @@ func TestToolToTypeScriptNestedAndNullableTypes(t *testing.T) {
 }`)
 	assert.Contains(t, declaration, "type SearchItemsOutput = number[] | null;")
 	assert.Contains(t, declaration, "declare function SearchItems(args: SearchItemsInput): Promise<SearchItemsOutput>;")
+}
+
+func TestTypeScriptArgumentsFollowDeclarationOrder(t *testing.T) {
+	t.Parallel()
+	type args struct {
+		Zulu  string `json:"zulu,omitempty"`
+		Alpha string `json:"alpha"`
+	}
+	declaration := toolToTypeScript(tools.Tool{Name: "ordered", Parameters: tools.MustSchemaFor[args]()})
+	assert.Less(t, strings.Index(declaration, "zulu?:"), strings.Index(declaration, "alpha:"))
 }

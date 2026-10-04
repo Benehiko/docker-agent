@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -37,13 +36,11 @@ func toolToTypeScript(tool tools.Tool) string {
 }
 
 func schemaMap(schema any) map[string]any {
-	data, err := json.Marshal(schema)
-	if err != nil {
+	if schema == nil {
 		return nil
 	}
-
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
+	result, err := tools.SchemaToOrderedMap(schema)
+	if err != nil {
 		return nil
 	}
 	return result
@@ -135,11 +132,7 @@ func schemaType(schema, root map[string]any, level int) string {
 func objectType(schema, root map[string]any, level int) string {
 	properties, _ := schema["properties"].(map[string]any)
 	required := stringSet(schema["required"])
-	keys := make([]string, 0, len(properties))
-	for key := range properties {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := tools.SchemaPropertyNames(schema)
 
 	indent := strings.Repeat("  ", level)
 	childIndent := strings.Repeat("  ", level+1)

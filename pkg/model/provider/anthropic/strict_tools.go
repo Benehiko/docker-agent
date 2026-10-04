@@ -371,10 +371,11 @@ func requiredNames(node map[string]any) []string {
 func strictSchemaExtras(requestTools []tools.Tool) map[string]map[string]any {
 	extras := make(map[string]map[string]any, len(requestTools))
 	for _, tool := range requestTools {
-		schema, ok := marshalToMap(tool.Parameters)
-		if !ok {
+		schema, err := tools.SchemaToMap(tool.Parameters)
+		if err != nil {
 			continue
 		}
+		tools.OrderedSchemaProperties(schema)
 		delete(schema, "type")
 		delete(schema, "properties")
 		delete(schema, "required")

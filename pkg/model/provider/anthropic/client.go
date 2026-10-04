@@ -786,6 +786,12 @@ func ConvertParametersToSchema(params any) (anthropic.ToolInputSchemaParam, erro
 		return anthropic.ToolInputSchemaParam{}, err
 	}
 
+	m, err := tools.SchemaToMap(params)
+	if err != nil {
+		return anthropic.ToolInputSchemaParam{}, err
+	}
+	tools.OrderedSchemaProperties(m)
+	schema.Properties = m["properties"]
 	return schema, nil
 }
 

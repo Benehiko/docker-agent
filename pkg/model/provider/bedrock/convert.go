@@ -345,5 +345,18 @@ func convertToolSchema(params any) document.Interface {
 			"properties": map[string]any{},
 		}
 	}
-	return document.NewLazyDocument(schema)
+	tools.OrderedSchemaProperties(schema)
+	return orderedToolSchema{Interface: document.NewLazyDocument(schema), schema: schema}
+}
+
+// orderedToolSchema supplies JSON bytes directly; Smithy's map encoder does not
+// honor encoding/json.Marshaler and would discard the declaration order.
+type orderedToolSchema struct {
+	document.Interface
+
+	schema map[string]any
+}
+
+func (s orderedToolSchema) MarshalSmithyDocument() ([]byte, error) {
+	return json.Marshal(s.schema)
 }

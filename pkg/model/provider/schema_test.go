@@ -101,6 +101,7 @@ func TestSchemaForGemini(t *testing.T) {
 	assert.JSONEq(t, `
 {
     "type": "object",
+    "propertyOrdering": ["direction", "labels", "perPage", "repo"],
     "properties": {
       "direction": {
         "description": "Order",
@@ -177,11 +178,13 @@ func TestNonStringEnumSchemaForGemini(t *testing.T) {
 	assert.JSONEq(t, `
 {
     "type": "object",
+    "propertyOrdering": ["issue_fields"],
     "properties": {
       "issue_fields": {
         "type": "array",
         "items": {
           "type": "object",
+          "propertyOrdering": ["delete", "priority", "state"],
           "properties": {
             "delete": {
               "type": "boolean",

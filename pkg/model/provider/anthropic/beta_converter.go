@@ -352,6 +352,7 @@ func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 			return nil, err
 		}
 
+		betaInputSchema.Properties = inputSchema.Properties
 		betaInputSchema.ExtraFields = inputSchema.ExtraFields
 		// Create BetaToolParam and wrap it in BetaToolUnionParam
 		betaTool := &anthropic.BetaToolParam{

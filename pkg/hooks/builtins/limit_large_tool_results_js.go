@@ -4,7 +4,6 @@ package builtins
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/docker/docker-agent/pkg/hooks"
 )
@@ -23,14 +22,7 @@ func limitLargeToolResults(_ context.Context, in *hooks.Input, _ []string) (*hoo
 		return nil, nil
 	}
 
-	updated := fmt.Sprintf(
-		"Tool call result was too large (%d bytes; limit %d bytes). The full result is not available in the browser; narrow the tool query to get the part you need.\n\nShowing the last %d lines (up to %d bytes):\n\n%s",
-		len(payload),
-		maxToolCallResultBytes,
-		largeToolCallResultTailLines,
-		largeToolCallResultTailBytes,
-		tailLargeToolResult(payload),
-	)
+	updated := tailToolResultNotice(in.ToolCategory, payload, largeToolResultNotice(payload)+" The full result is not available in the browser; narrow the tool query to get the part you need.\n\n")
 	return &hooks.Output{
 		HookSpecificOutput: &hooks.HookSpecificOutput{
 			HookEventName:       hooks.EventToolResponseTransform,

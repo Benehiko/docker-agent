@@ -1,9 +1,12 @@
 package builtins
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/docker/docker-agent/pkg/chat"
 )
 
 // LimitLargeToolResults is the registered name of the builtin
@@ -22,15 +25,16 @@ const (
 )
 
 // largeResultCategories lists the tool categories whose results can be
-// arbitrarily large and are not bounded anywhere else, so they are subject
+// large even when their capture buffer is bounded, so they are subject
 // to the oversized-result cap. filesystem and shell are the high-output
-// built-in toolsets; mcp and a2a call external servers that impose no
+// built-in toolsets alongside background_jobs; mcp and a2a call external servers that impose no
 // per-result limit of their own (unlike the openapi/api toolsets, which
 // already truncate their output). Internal toolsets (memory, plan, tasks,
 // think, ...) return bounded, structured results and are left untouched.
 var largeResultCategories = map[string]bool{
 	filesystemToolCategory: true,
 	"shell":                true,
+	"background_jobs":      true,
 	"mcp":                  true,
 	"a2a":                  true,
 }
@@ -84,4 +88,53 @@ func lastLines(data []byte, limit int) []byte {
 		}
 	}
 	return data
+}
+
+// BoundToolResult is the fail-bounded, filesystem-free backstop for eligible
+// results. notice describes where omitted output can (or cannot) be recovered.
+func BoundToolResult(category, name, payload, notice string) string {
+	if !largeResultCategories[category] || len(payload) <= maxToolCallResultBytes {
+		return payload
+	}
+	prefix := fmt.Sprintf("Tool call result was too large (%d bytes; limit %d bytes). %s\n\n", len(payload), maxToolCallResultBytes, notice)
+	if category == filesystemToolCategory && name == "read_file" {
+		prefix += "Showing the beginning of the result:\n\n"
+		return boundedExcerpt(prefix, payload, true)
+	}
+	return tailToolResultNotice(category, payload, prefix)
+}
+
+func boundedExcerpt(prefix, payload string, head bool) string {
+	prefix = chat.TruncateUTF8Bytes(prefix, maxToolCallResultBytes/2)
+	budget := maxToolCallResultBytes - len(prefix)
+	if head {
+		return prefix + chat.TruncateUTF8Bytes(payload, budget)
+	}
+	if len(payload) > budget {
+		payload = string(trimToRuneStart([]byte(payload[len(payload)-budget:])))
+	}
+	return prefix + payload
+}
+
+func tailToolResultNotice(category, payload, prefix string) string {
+	if category == "background_jobs" {
+		// Preserve status/exit code ahead of the log tail, even with a huge command.
+		if header, _, ok := strings.Cut(payload, "--- Output ---\n"); ok {
+			for line := range strings.SplitSeq(header, "\n") {
+				prefix += chat.TruncateUTF8Bytes(line, 512) + "\n"
+				if len(prefix) > maxToolCallResultBytes/4 {
+					break
+				}
+			}
+		}
+	}
+	prefix += fmt.Sprintf("Showing the last %d lines (up to %d bytes, including this notice):\n\n", largeToolCallResultTailLines, maxToolCallResultBytes)
+	return boundedExcerpt(prefix, tailLargeToolResult(payload), false)
+}
+
+func largeToolResultNotice(payload string) string {
+	if len(payload) > maxToolCallResultBytes {
+		return fmt.Sprintf("Tool call result was too large (%d bytes; limit %d bytes).", len(payload), maxToolCallResultBytes)
+	}
+	return fmt.Sprintf("Tool call result was too large (%d lines; limit %d lines).", lineCount(payload), largeToolCallResultTailLines)
 }

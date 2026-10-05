@@ -436,7 +436,7 @@ func TestLimitLargeToolResultsNoopsForInternalCategory(t *testing.T) {
 }
 
 func TestLimitLargeToolResultsCapsExternalToolCategories(t *testing.T) {
-	for _, category := range []string{"mcp", "a2a"} {
+	for _, category := range []string{"filesystem", "shell", "mcp", "a2a", "background_jobs"} {
 		t.Run(category, func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
 
@@ -475,6 +475,8 @@ func TestLimitLargeToolResultsTriggersOnLineCount(t *testing.T) {
 	updated := *out.HookSpecificOutput.UpdatedToolResponse
 	assert.Contains(t, updated, "Tool call result was too large")
 	assert.NotContains(t, updated, strings.Repeat("x\n", 2001))
+	assert.Contains(t, updated, "2001 lines; limit 2000 lines")
+	assert.LessOrEqual(t, len(updated), maxToolCallResultBytesForTest)
 }
 
 func TestLimitLargeToolResultsNoopsForSmallOutput(t *testing.T) {
@@ -530,6 +532,7 @@ func TestLimitLargeToolResultsReadFileKeepsHeadWithRangedReadNotice(t *testing.T
 
 	// Head preserved, tail dropped — the opposite of the shell/tail case.
 	head := extractShownExcerpt(t, updated)
+	assert.LessOrEqual(t, len(updated), maxToolCallResultBytesForTest)
 	assert.True(t, strings.HasPrefix(head, strings.Repeat("x", 600)+" line 0\n"),
 		"head excerpt must start at the beginning of the result")
 	assert.NotContains(t, updated, " line 2999\n")
@@ -601,7 +604,8 @@ func TestLimitLargeToolResultsReadFileSingleLongLineDoesNotSuggestLoopingRead(t 
 
 	updated := *out.HookSpecificOutput.UpdatedToolResponse
 	assert.Contains(t, updated, "Tool call result was too large")
-	assert.Contains(t, updated, fmt.Sprintf("Showing the first %d bytes", largeToolCallResultTailBytesForTest))
+	assert.Contains(t, updated, "Showing the first")
+	assert.LessOrEqual(t, len(updated), maxToolCallResultBytesForTest)
 
 	// No line-based continuation suggestion: any "line": N (including the
 	// misleading "line": 1) would re-read the same oversized line forever.
@@ -612,7 +616,7 @@ func TestLimitLargeToolResultsReadFileSingleLongLineDoesNotSuggestLoopingRead(t 
 
 	// The head excerpt is retained verbatim and stays valid UTF-8.
 	head := extractShownExcerpt(t, updated)
-	assert.Equal(t, original[:largeToolCallResultTailBytesForTest], head)
+	assert.Equal(t, original[:len(head)], head)
 	assert.Equal(t, updated, strings.ToValidUTF8(updated, ""))
 
 	// The full result is still spilled for recovery.

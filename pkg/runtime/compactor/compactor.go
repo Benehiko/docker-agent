@@ -34,6 +34,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/session"
@@ -291,6 +292,7 @@ func runUsage(sess *session.Session, seedLen int) (string, chat.Usage) {
 // consistent across the two strategies.
 func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
 	messages, sessIndices, itemCount := sess.CompactionInput()
+	messages = builtins.BoundToolMessages(messages)
 	return firstKeptSessionIndex(sessIndices, itemCount, compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit)))
 }
 
@@ -311,6 +313,7 @@ func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
 // are dropped from the front of the to-compact list to make room.
 func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, additionalPrompt string) ([]chat.Message, int) {
 	messages, sessIndices, itemCount := sess.CompactionInput()
+	messages = builtins.BoundToolMessages(messages)
 
 	splitIdx := compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit))
 	firstKeptEntry := firstKeptSessionIndex(sessIndices, itemCount, splitIdx)

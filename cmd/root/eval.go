@@ -19,7 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry"
 )
 
-const defaultJudgeModel = "anthropic/claude-opus-5"
+const defaultJudgeModel = "openai/gpt-5.6-terra"
 
 type evalFlags struct {
 	evaluation.Config

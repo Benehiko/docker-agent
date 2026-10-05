@@ -9,6 +9,20 @@ import (
 	"github.com/docker/docker-agent/pkg/evaluation"
 )
 
+func TestEvalJudgeModelFlagDefaultsToGPT56Terra(t *testing.T) {
+	t.Parallel()
+
+	cmd := newEvalCmd()
+
+	flag := cmd.Flags().Lookup("judge-model")
+	require.NotNil(t, flag, "eval must expose --judge-model")
+	assert.Equal(t, "openai/gpt-5.6-terra", flag.DefValue)
+
+	value, err := cmd.Flags().GetString("judge-model")
+	require.NoError(t, err)
+	assert.Equal(t, "openai/gpt-5.6-terra", value)
+}
+
 func TestEvalContainerRuntimeFlagDefaultsToDocker(t *testing.T) {
 	t.Parallel()
 

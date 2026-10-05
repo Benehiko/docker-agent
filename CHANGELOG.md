@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.148.0] - 2026-10-05
+
+This release fixes two issues: oversized tool output handling and duplicate line rendering in the lean TUI.
+
+## Bug Fixes
+- Fixes oversized tool results from blocking chat or compaction requests by bounding complete tool results to 50 KiB and sanitizing historical tool results on outgoing requests
+- Fixes duplicate lines appearing while streaming wrapped text in the lean TUI by avoiding replay of archived lines when markdown changes only affect ANSI formatting
+### Pull Requests
+
+- [#4503](https://github.com/docker/docker-agent/pull/4503) - fix(leantui): avoid duplicate lines while streaming wrapped text
+- [#4515](https://github.com/docker/docker-agent/pull/4515) - fix: bound tool results and recover oversized session history
+- [#4517](https://github.com/docker/docker-agent/pull/4517) - docs: update CHANGELOG.md for v1.147.0
+
+
 ## [v1.147.0] - 2026-10-05
 
 This release adds hook-driven agent routing, a lean TUI settings panel, codemode tool call visibility, and several new CLI and eval capabilities, alongside a broad set of bug fixes for assistant message handling, DMR routing, and TUI rendering.
@@ -6796,3 +6810,5 @@ This release improves the terminal user interface with better error handling and
 [v1.145.0]: https://github.com/docker/docker-agent/releases/tag/v1.145.0
 
 [v1.147.0]: https://github.com/docker/docker-agent/releases/tag/v1.147.0
+
+[v1.148.0]: https://github.com/docker/docker-agent/releases/tag/v1.148.0

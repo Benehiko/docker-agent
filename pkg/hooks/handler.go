@@ -302,6 +302,18 @@ func (h *builtinHandler) Run(ctx context.Context, input []byte) (HandlerResult, 
 	if err := json.Unmarshal(input, &in); err != nil {
 		return HandlerResult{ExitCode: -1}, fmt.Errorf("decode hook input: %w", err)
 	}
+	if in.HookEventName == EventToolInputTransform && in.ToolInput != nil {
+		// Rewrites must not round untouched integers in nested tool arguments.
+		var numbered struct {
+			ToolInput map[string]any `json:"tool_input"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(input))
+		decoder.UseNumber()
+		if err := decoder.Decode(&numbered); err != nil {
+			return HandlerResult{ExitCode: -1}, fmt.Errorf("decode hook tool input: %w", err)
+		}
+		in.ToolInput = numbered.ToolInput
+	}
 	// A working_dir override repoints Input.Cwd, the directory every
 	// builtin keys off. With no override Input.Cwd is left as-is so
 	// callers that supply a cwd (e.g. the worktree_create event) keep it.

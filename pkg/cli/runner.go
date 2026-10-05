@@ -181,11 +181,13 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		firstLoop := true
 		lastAgent := rt.CurrentAgentName(ctx)
 		var lastConfirmedToolCallID string
+		var printingReasoning bool
 		for event := range events {
 			agentName := event.GetAgentName()
 			if agentName != "" && (firstLoop || lastAgent != agentName) {
 				if !firstLoop {
 					out.Println()
+					printingReasoning = false
 				}
 				out.PrintAgentName(agentName)
 				firstLoop = false
@@ -193,10 +195,20 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			}
 			switch e := event.(type) {
 			case *runtime.AgentChoiceEvent:
-				out.Print(e.Content)
+				if e.Content != "" {
+					if printingReasoning {
+						out.Print("\n\n")
+					}
+					out.Print(e.Content)
+					printingReasoning = false
+				}
 			case *runtime.AgentChoiceReasoningEvent:
-				out.Print(e.Content)
+				if e.Content != "" {
+					out.Print(e.Content)
+					printingReasoning = true
+				}
 			case *runtime.ToolCallConfirmationEvent:
+				printingReasoning = false
 				result := out.PrintToolCallWithConfirmation(ctx, e.ToolCall, rd)
 				// If interrupted, skip resuming; the runtime will notice context cancellation and stop
 				if ctx.Err() != nil {
@@ -227,12 +239,14 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				// Only print if this wasn't already shown during confirmation
 				if e.ToolCall.ID != lastConfirmedToolCallID {
 					out.PrintToolCall(e.ToolCall)
+					printingReasoning = false
 				}
 			case *runtime.ToolCallResponseEvent:
 				if cfg.HideToolCalls {
 					continue
 				}
 				out.PrintToolCallResponse(e.ToolDefinition.Name, e.Response)
+				printingReasoning = false
 				// Clear the confirmed ID after the tool completes
 				if e.ToolCallID == lastConfirmedToolCallID {
 					lastConfirmedToolCallID = ""
@@ -242,6 +256,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				// reasoning / an empty response) in non-TUI runs, where they would
 				// otherwise be dropped. The TUI renders these as notifications.
 				out.PrintWarning(e.Message)
+				printingReasoning = false
 			case *runtime.ErrorEvent:
 				lowerErr := strings.ToLower(e.Error)
 				if strings.Contains(lowerErr, "context cancel") && ctx.Err() != nil { // treat Ctrl+C cancellations as non-errors
@@ -260,6 +275,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 					rt.Resume(runCtx, runtime.ResumeReject(""))
 					return nil
 				case maxIterPrompt:
+					printingReasoning = false
 					result := out.PromptMaxIterationsContinue(ctx, e.MaxIterations)
 					switch result {
 					case ConfirmationApprove:
@@ -281,6 +297,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 					continue
 				}
 
+				printingReasoning = false
 				result := out.PromptOAuthAuthorization(ctx, serverURL)
 
 				if ctx.Err() != nil {

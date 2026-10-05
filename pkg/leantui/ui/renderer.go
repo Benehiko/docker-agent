@@ -200,7 +200,8 @@ func (r *Renderer) redrawSuffix(newLines []string, first, cursorLine, cursorCol 
 			// Offscreen tool animations must not become new scrollback entries.
 			continue
 		}
-		if i < r.viewportTop && i < len(r.prev) && r.prev[i] == newLines[i] {
+		// Formatting can change as markdown wraps, but archived text must not replay.
+		if i < r.viewportTop && i < len(r.prev) && ansi.Strip(r.prev[i]) == ansi.Strip(newLines[i]) {
 			continue
 		}
 		changed = append(changed, newLines[i])

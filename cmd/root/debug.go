@@ -91,7 +91,8 @@ func newDebugCmd() *cobra.Command {
 		Long: "Call a tool of an agent directly, without an LLM turn.\n\n" +
 			"Parameters must be a JSON object (defaults to {}). Use --agent to select an agent.\n" +
 			"Use 'debug toolsets --json' to inspect tool names and parameter schemas.\n\n" +
-			"Tool response transform hooks run before printing; use --no-hook to skip them.\n" +
+			"Tool input transforms, response transforms, and post-tool-use hooks run by default.\n" +
+			"Use --no-hook to skip them.\n" +
 			"Calls have real side effects and bypass other hooks and approval checks.\n" +
 			"Tools that require an agent runtime are not supported. Built-in background jobs\n" +
 			"cannot be launched because toolsets are stopped when the command exits.",
@@ -102,7 +103,7 @@ func newDebugCmd() *cobra.Command {
 	}
 	toolCmd.Flags().StringVarP(&flags.toolAgent, "agent", "a", "", "Name of the agent (defaults to the team's default agent)")
 	toolCmd.Flags().BoolVar(&flags.toolJSON, "json", false, "Output the full tool result in JSON format")
-	toolCmd.Flags().BoolVar(&flags.toolNoHook, "no-hook", false, "Skip tool response transform hooks")
+	toolCmd.Flags().BoolVar(&flags.toolNoHook, "no-hook", false, "Skip tool input transforms, response transforms, and post-tool-use hooks")
 	cmd.AddCommand(toolCmd)
 	skillsCmd := &cobra.Command{
 		Use:   "skills <agent-file>|<registry-ref>",

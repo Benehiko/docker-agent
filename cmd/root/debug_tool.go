@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"uuid"
 
 	"github.com/spf13/cobra"
@@ -16,7 +17,6 @@ import (
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/runtime"
-	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
@@ -71,14 +71,63 @@ func (f *debugFlags) runDebugToolCommand(cmd *cobra.Command, args []string) (com
 	}
 
 	tool := available[index]
-	result, err := callDebugTool(ctx, tool, arguments)
-	if err != nil {
-		return err
+	if tool.RuntimeHandler != "" || tool.Handler == nil {
+		return fmt.Errorf("tool %q requires an agent runtime and cannot be called directly", tool.Name)
 	}
+	var executor *hooks.Executor
+	var input *hooks.Input
 	if !f.toolNoHook {
-		if err := f.transformDebugToolResponse(cmd, a, loaded.ProviderRegistry, tool, arguments, result); err != nil {
+		executor, err = f.debugToolHooksExecutor(a, loaded.ProviderRegistry)
+		if err != nil {
 			return err
 		}
+		var toolInput map[string]any
+		decoder := json.NewDecoder(strings.NewReader(arguments))
+		decoder.UseNumber()
+		if err := decoder.Decode(&toolInput); err != nil {
+			return fmt.Errorf("decoding tool input for hooks: %w", err)
+		}
+		// Retain limiter spill files so printed paths remain usable after this command exits.
+		input = &hooks.Input{
+			SessionID:    "debug_" + uuid.NewV4().String(),
+			AgentName:    a.Name(),
+			ToolCategory: tool.Category,
+			ToolName:     tool.Name,
+			ToolUseID:    "debug_" + tool.Name,
+			ToolInput:    toolInput,
+		}
+		arguments, err = transformDebugToolInput(ctx, cmd, executor, input, arguments)
+		if err != nil {
+			return err
+		}
+	}
+
+	result, callErr := callDebugTool(ctx, tool, arguments)
+	if callErr != nil {
+		if executor == nil || ctx.Err() != nil {
+			return callErr
+		}
+		result = tools.ResultError(callErr.Error())
+	}
+	var postErr error
+	if executor != nil {
+		input.ToolResponse = result.Output
+		input.ToolError = result.IsError
+		transformed, err := dispatchDebugToolHook(ctx, cmd, executor, hooks.EventToolResponseTransform, input)
+		if err != nil {
+			return err
+		}
+		if transformed.UpdatedToolResponse != nil {
+			result.Output = *transformed.UpdatedToolResponse
+		}
+		input.ToolResponse = result.Output
+		_, postErr = dispatchDebugToolHook(ctx, cmd, executor, hooks.EventPostToolUse, input)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	if callErr != nil {
+		return errors.Join(callErr, postErr)
 	}
 
 	if f.toolJSON {
@@ -90,61 +139,74 @@ func (f *debugFlags) runDebugToolCommand(cmd *cobra.Command, args []string) (com
 		return err
 	}
 	if result.IsError {
-		return fmt.Errorf("tool %q returned an error for agent %q", args[1], a.Name())
+		return errors.Join(fmt.Errorf("tool %q returned an error for agent %q", args[1], a.Name()), postErr)
 	}
-	return nil
+	return postErr
 }
 
-func (f *debugFlags) transformDebugToolResponse(cmd *cobra.Command, a *agent.Agent, providers *provider.Registry, tool tools.Tool, arguments string, result *tools.ToolCallResult) error {
-	ctx := cmd.Context()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+func (f *debugFlags) debugToolHooksExecutor(a *agent.Agent, providers *provider.Registry) (*hooks.Executor, error) {
 	workingDir := f.runConfig.WorkingDir
 	if workingDir == "" {
 		var err error
 		workingDir, err = os.Getwd()
 		if err != nil {
-			return fmt.Errorf("resolving hook working directory: %w", err)
+			return nil, fmt.Errorf("resolving hook working directory: %w", err)
 		}
 	}
 
 	cfg := &hooks.Config{}
 	if configured := a.Hooks(); configured != nil {
+		cfg.ToolInputTransform = slices.Clone(configured.ToolInputTransform)
 		cfg.ToolResponseTransform = slices.Clone(configured.ToolResponseTransform)
+		cfg.PostToolUse = slices.Clone(configured.PostToolUse)
 	}
 	cfg = builtins.ApplyAgentDefaults(cfg, builtins.AgentDefaults{RedactSecrets: a.RedactSecrets()})
 	registry := hooks.NewRegistry()
 	if err := builtins.Register(registry); err != nil {
-		return fmt.Errorf("registering builtin hooks: %w", err)
+		return nil, fmt.Errorf("registering builtin hooks: %w", err)
 	}
 	runtime.RegisterModelHook(registry, providers)
-	executor := hooks.NewExecutorWithRegistry(cfg, workingDir, nil, registry)
-	// Retain limiter spill files so printed paths remain usable after this command exits.
-	input := &hooks.Input{
-		SessionID:    "debug_" + uuid.NewV4().String(),
-		AgentName:    a.Name(),
-		ToolCategory: tool.Category,
-		ToolName:     tool.Name,
-		ToolUseID:    "debug_" + tool.Name,
-		ToolInput:    toolexec.ParseToolInput(arguments),
-		ToolResponse: result.Output,
-		ToolError:    result.IsError,
+	return hooks.NewExecutorWithRegistry(cfg, workingDir, nil, registry), nil
+}
+
+func transformDebugToolInput(ctx context.Context, cmd *cobra.Command, executor *hooks.Executor, input *hooks.Input, arguments string) (string, error) {
+	transformed, err := dispatchDebugToolHook(ctx, cmd, executor, hooks.EventToolInputTransform, input)
+	if err != nil {
+		return "", err
 	}
-	transformed, err := executor.Dispatch(ctx, hooks.EventToolResponseTransform, input)
+	if transformed.ModifiedInput == nil {
+		return arguments, nil
+	}
+	updated, err := json.Marshal(transformed.ModifiedInput)
+	if err != nil {
+		return "", fmt.Errorf("encoding transformed tool input: %w", err)
+	}
+	input.ToolInput = transformed.ModifiedInput
+	return string(updated), nil
+}
+
+func dispatchDebugToolHook(ctx context.Context, cmd *cobra.Command, executor *hooks.Executor, event hooks.EventType, input *hooks.Input) (*hooks.Result, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	result, err := executor.Dispatch(ctx, event, input)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err != nil {
-		return fmt.Errorf("transforming tool %q response: %w", tool.Name, err)
+		return nil, fmt.Errorf("executing %s hook for tool %q: %w", event, input.ToolName, err)
 	}
-	if transformed.SystemMessage != "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Warning:", transformed.SystemMessage)
+	if result.SystemMessage != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Warning:", result.SystemMessage)
 	}
-	if transformed.UpdatedToolResponse != nil {
-		result.Output = *transformed.UpdatedToolResponse
+	if !result.Allowed {
+		message := fmt.Sprintf("tool %q blocked by a %s hook", input.ToolName, event)
+		if reason := strings.TrimSpace(result.Message); reason != "" {
+			message += ": " + reason
+		}
+		return nil, errors.New(message)
 	}
-	return nil
+	return result, nil
 }
 
 func callDebugTool(ctx context.Context, tool tools.Tool, arguments string) (*tools.ToolCallResult, error) {

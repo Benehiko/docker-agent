@@ -26,6 +26,7 @@ type debugFlags struct {
 	modelOverrides []string
 	toolsetsJSON   bool
 	toolJSON       bool
+	toolNoHook     bool
 	toolAgent      string
 	skillsJSON     bool
 	runConfig      config.RuntimeConfig
@@ -90,7 +91,8 @@ func newDebugCmd() *cobra.Command {
 		Long: "Call a tool of an agent directly, without an LLM turn.\n\n" +
 			"Parameters must be a JSON object (defaults to {}). Use --agent to select an agent.\n" +
 			"Use 'debug toolsets --json' to inspect tool names and parameter schemas.\n\n" +
-			"Calls have real side effects and bypass session hooks and approval checks.\n" +
+			"Tool response transform hooks run before printing; use --no-hook to skip them.\n" +
+			"Calls have real side effects and bypass other hooks and approval checks.\n" +
 			"Tools that require an agent runtime are not supported. Built-in background jobs\n" +
 			"cannot be launched because toolsets are stopped when the command exits.",
 		Example: `  docker agent debug tool agent.yaml read_file '{"path":"README.md"}'
@@ -100,6 +102,7 @@ func newDebugCmd() *cobra.Command {
 	}
 	toolCmd.Flags().StringVarP(&flags.toolAgent, "agent", "a", "", "Name of the agent (defaults to the team's default agent)")
 	toolCmd.Flags().BoolVar(&flags.toolJSON, "json", false, "Output the full tool result in JSON format")
+	toolCmd.Flags().BoolVar(&flags.toolNoHook, "no-hook", false, "Skip tool response transform hooks")
 	cmd.AddCommand(toolCmd)
 	skillsCmd := &cobra.Command{
 		Use:   "skills <agent-file>|<registry-ref>",
@@ -129,13 +132,21 @@ func newDebugCmd() *cobra.Command {
 // loadTeam loads an agent team from the given agent file.
 // Callers should defer stopToolSets(ctx, t) to clean up.
 func (f *debugFlags) loadTeam(ctx context.Context, agentFilename string, opts ...teamloader.Opt) (*team.Team, error) {
+	result, err := f.loadTeamWithConfig(ctx, agentFilename, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return result.Team, nil
+}
+
+func (f *debugFlags) loadTeamWithConfig(ctx context.Context, agentFilename string, opts ...teamloader.Opt) (*teamloader.LoadResult, error) {
 	agentSource, err := sources.Resolve(agentFilename, f.runConfig.EnvProvider())
 	if err != nil {
 		return nil, err
 	}
 
 	opts = append(loaderdefaults.Opts(), opts...)
-	t, err := teamloader.Load(ctx, agentSource, &f.runConfig, opts...)
+	t, err := teamloader.LoadWithConfig(ctx, agentSource, &f.runConfig, opts...)
 	if err != nil {
 		return nil, err
 	}

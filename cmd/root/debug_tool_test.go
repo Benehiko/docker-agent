@@ -10,16 +10,21 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/docker/portcullis"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/hooks"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 )
@@ -53,6 +58,13 @@ func runDebugTool(t *testing.T, flags *debugFlags, args ...string) (string, erro
 func runDebugToolConfig(t *testing.T, flags *debugFlags, cfg string, args ...string) (string, error) {
 	t.Helper()
 
+	out, _, err := runDebugToolConfigOutputs(t, flags, cfg, args...)
+	return out, err
+}
+
+func runDebugToolConfigOutputs(t *testing.T, flags *debugFlags, cfg string, args ...string) (string, string, error) {
+	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(cfg), 0o600))
@@ -60,14 +72,14 @@ func runDebugToolConfig(t *testing.T, flags *debugFlags, cfg string, args ...str
 	flags.runConfig.WorkingDir = dir
 	flags.runConfig.EnvProviderOverride = environment.NewMapEnvProvider(map[string]string{"OPENAI_API_KEY": "test-key"})
 
-	var out bytes.Buffer
+	var out, warnings bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
-	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetErr(&warnings)
 	cmd.SetContext(t.Context())
 
 	err := flags.runDebugToolCommand(cmd, append([]string{path}, args...))
-	return out.String(), err
+	return out.String(), warnings.String(), err
 }
 
 func TestDebugToolCommand(t *testing.T) {
@@ -202,8 +214,11 @@ func TestDebugToolCommand_Arguments(t *testing.T) {
 	}
 	assert.NoError(t, cmd.Args(cmd, []string{"agent.yaml", "think"}))
 	assert.NoError(t, cmd.Args(cmd, []string{"agent.yaml", "think", "{}"}))
-	require.NoError(t, cmd.ParseFlags([]string{"-a", "helper", "--json"}))
-	assert.NoError(t, cmd.Help())
+	require.NoError(t, cmd.ParseFlags([]string{"-a", "helper", "--json", "--no-hook"}))
+	noHook, err := cmd.Flags().GetBool("no-hook")
+	require.NoError(t, err)
+	assert.True(t, noHook)
+	require.NoError(t, cmd.Help())
 	assert.Contains(t, out.String(), "Call a tool of an agent directly")
 }
 
@@ -445,4 +460,331 @@ models:
 			}
 		})
 	}
+}
+
+const debugToolHooksConfig = `
+agents:
+  root:
+    model: test
+    toolsets:
+      - type: think
+      - type: filesystem
+        tools: [read_file]
+    hooks:
+      tool_response_transform:
+        - matcher: think|read_file
+          hooks:
+            - type: command
+              command: >-
+                printf '%s' '{"hook_specific_output":{"updated_tool_response":"first rewrite"}}'
+            - type: command
+              command: >-
+                cat > hook-input.json;
+                printf '%s' '{"hook_specific_output":{"updated_tool_response":"transformed"}}'
+        - matcher: other_tool
+          hooks:
+            - type: command
+              command: >-
+                printf '%s' '{"hook_specific_output":{"updated_tool_response":"wrong matcher"}}'
+      post_tool_use:
+        - hooks:
+            - type: command
+              command: touch post-tool-marker
+      session_start:
+        - type: command
+          command: touch session-marker
+  helper:
+    model: test
+    toolsets:
+      - type: think
+    hooks:
+      tool_response_transform:
+        - hooks:
+            - type: command
+              command: >-
+                printf '%s' '{"hook_specific_output":{"updated_tool_response":"helper response"}}'
+models:
+  test:
+    provider: openai
+    model: gpt-4o
+    max_tokens: 100
+`
+
+func TestDebugToolCommand_ResponseHooks(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	for _, jsonOutput := range []bool{false, true} {
+		for _, toolError := range []bool{false, true} {
+			t.Run(fmt.Sprintf("json=%t/error=%t", jsonOutput, toolError), func(t *testing.T) {
+				t.Parallel()
+
+				flags := &debugFlags{toolJSON: jsonOutput}
+				args := []string{"think", `{"thought":"original"}`}
+				category := "think"
+				if toolError {
+					args = []string{"read_file", `{"path":"missing.txt"}`}
+					category = "filesystem"
+				}
+				out, warnings, err := runDebugToolConfigOutputs(t, flags, debugToolHooksConfig, args...)
+				if toolError {
+					require.ErrorContains(t, err, "returned an error")
+				} else {
+					require.NoError(t, err)
+				}
+				assert.Empty(t, warnings)
+				if jsonOutput {
+					var result tools.ToolCallResult
+					require.NoError(t, json.Unmarshal([]byte(out), &result))
+					assert.Equal(t, "transformed", result.Output)
+					assert.Equal(t, toolError, result.IsError)
+				} else {
+					assert.Equal(t, "transformed\n", out)
+				}
+				data, err := os.ReadFile(filepath.Join(flags.runConfig.WorkingDir, "hook-input.json"))
+				require.NoError(t, err)
+				var input hooks.Input
+				require.NoError(t, json.Unmarshal(data, &input))
+				assert.Equal(t, hooks.EventToolResponseTransform, input.HookEventName)
+				assert.Equal(t, "root", input.AgentName)
+				assert.Equal(t, args[0], input.ToolName)
+				assert.Equal(t, category, input.ToolCategory)
+				assert.Equal(t, "debug_"+args[0], input.ToolUseID)
+				assert.NotEmpty(t, input.SessionID)
+				assert.Equal(t, flags.runConfig.WorkingDir, input.Cwd)
+				assert.JSONEq(t, args[1], string(mustMarshalJSON(t, input.ToolInput)))
+				assert.Equal(t, "first rewrite", input.ToolResponse)
+				assert.Equal(t, toolError, input.ToolError)
+				assert.NoFileExists(t, filepath.Join(flags.runConfig.WorkingDir, "post-tool-marker"))
+				assert.NoFileExists(t, filepath.Join(flags.runConfig.WorkingDir, "session-marker"))
+			})
+		}
+	}
+}
+
+func TestDebugToolCommand_NoHook(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
+			t.Parallel()
+
+			flags := &debugFlags{toolNoHook: true, toolJSON: jsonOutput}
+			out, warnings, err := runDebugToolConfigOutputs(t, flags, debugToolHooksConfig, "think", `{"thought":"original"}`)
+			require.NoError(t, err)
+			assert.Empty(t, warnings)
+			assert.Contains(t, out, "original")
+			assert.NotContains(t, out, "transformed")
+			assert.NoFileExists(t, filepath.Join(flags.runConfig.WorkingDir, "hook-input.json"))
+		})
+	}
+}
+
+func TestDebugToolCommand_SelectedAgentHooks(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	flags := &debugFlags{toolAgent: "helper"}
+	out, err := runDebugToolConfig(t, flags, debugToolHooksConfig, "think")
+	require.NoError(t, err)
+	assert.Equal(t, "helper response\n", out)
+	assert.NoFileExists(t, filepath.Join(flags.runConfig.WorkingDir, "hook-input.json"))
+}
+
+func TestDebugToolCommand_ResponseHookResults(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	for _, tc := range []struct {
+		name    string
+		command string
+		output  string
+		warning string
+	}{
+		{"empty rewrite", `printf '%s' '{"hook_specific_output":{"updated_tool_response":""}}'`, "\n", ""},
+		{"no rewrite", "true", "Thoughts:\noriginal\n", ""},
+		{"failed hook", "exit 1", "Thoughts:\noriginal\n", "exited with status 1"},
+		{"ignored failure", "exit 1", "Thoughts:\noriginal\n", ""},
+		{"system message", `printf '%s' '{"system_message":"hook warning","hook_specific_output":{"updated_tool_response":"rewritten"}}'`, "rewritten\n", "hook warning"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := strings.ReplaceAll(debugToolConfig, "    model: test\n    toolsets:", fmt.Sprintf("    model: test\n    hooks:\n      tool_response_transform:\n        - hooks:\n            - type: command\n              command: %q\n              on_error: %s\n    toolsets:", tc.command, map[bool]string{true: "ignore", false: "warn"}[tc.name == "ignored failure"]))
+			out, warnings, err := runDebugToolConfigOutputs(t, &debugFlags{}, cfg, "think", `{"thought":"original"}`)
+			require.NoError(t, err)
+			assert.Equal(t, tc.output, out)
+			if tc.warning == "" {
+				assert.Empty(t, warnings)
+			} else {
+				assert.Contains(t, warnings, tc.warning)
+			}
+		})
+	}
+}
+
+func TestDebugToolCommand_BuiltinResponseHooks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("JSON transform", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS == "windows" {
+			t.Skip("hook fixture uses POSIX shell commands")
+		}
+
+		cfg := strings.Replace(debugToolConfig, "    model: test", `    model: test
+    hooks:
+      tool_response_transform:
+        - matcher: read_file
+          hooks:
+            - type: command
+              command: >-
+                printf '%s' '{"hook_specific_output":{"updated_tool_response":"{\"keep\":42,\"drop\":true}"}}'
+            - type: builtin
+              command: transform_json
+              args: [keep]`, 1)
+		out, err := runDebugToolConfig(t, &debugFlags{}, cfg, "read_file", `{"path":"hello.txt"}`)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"keep":42}`, out)
+	})
+
+	t.Run("agent secret redaction", func(t *testing.T) {
+		t.Parallel()
+
+		const secret = "dckr_pat_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAA"
+		cfg := strings.Replace(debugToolConfig, "    model: test", "    model: test\n    redact_secrets: true", 1)
+		for _, noHook := range []bool{false, true} {
+			out, err := runDebugToolConfig(t, &debugFlags{toolNoHook: noHook}, cfg, "think", `{"thought":"`+secret+`"}`)
+			require.NoError(t, err)
+			if noHook {
+				assert.Contains(t, out, secret)
+			} else {
+				assert.NotContains(t, out, secret)
+				assert.Contains(t, out, portcullis.Marker)
+			}
+		}
+	})
+}
+
+func TestTransformDebugToolResponse_CanceledHook(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cfg := &hooks.Config{ToolResponseTransform: []hooks.MatcherConfig{{Hooks: []hooks.Hook{{Command: "true"}}}}}
+	a := agent.New("root", "", agent.WithHooks(cfg))
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+	cancel()
+	result := tools.ResultSuccess("must not leak")
+	flags := &debugFlags{}
+	err := flags.transformDebugToolResponse(cmd, a, nil, tools.Tool{Name: "test"}, "{}", result)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
+}
+
+func TestDebugToolCommand_LargeResponse(t *testing.T) {
+	t.Parallel()
+	for _, noHook := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no-hook=%t", noHook), func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "large.txt")
+			payload := strings.Repeat("0123456789\n", 7000)
+			require.NoError(t, os.WriteFile(path, []byte(payload), 0o600))
+			out, err := runDebugTool(t, &debugFlags{toolNoHook: noHook}, "read_file", string(mustMarshalJSON(t, map[string]string{"path": path})))
+			require.NoError(t, err)
+			if noHook {
+				assert.Contains(t, out, payload)
+				assert.NotContains(t, out, "Tool call result was too large")
+				return
+			}
+			assert.LessOrEqual(t, len(out), 50*1024+1)
+			_, notice, ok := strings.Cut(out, "The full result is available in a file: ")
+			require.True(t, ok)
+			spillPath, _, ok := strings.Cut(notice, "\n")
+			require.True(t, ok)
+			t.Cleanup(func() { assert.NoError(t, os.RemoveAll(filepath.Dir(spillPath))) })
+			data, err := os.ReadFile(spillPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), payload)
+		})
+	}
+}
+
+func TestTransformDebugToolResponse_PreservesResultAndConfig(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	cfg := &hooks.Config{ToolResponseTransform: []hooks.MatcherConfig{{Hooks: []hooks.Hook{{
+		Type: hooks.HookTypeCommand, Command: `printf '%s' '{"hook_specific_output":{"updated_tool_response":"rewritten"}}'`,
+	}}}}}
+	a := agent.New("root", "", agent.WithHooks(cfg), agent.WithRedactSecrets(true))
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	result := &tools.ToolCallResult{
+		Output:            "original",
+		IsError:           true,
+		Images:            []tools.MediaContent{{Data: "aGVsbG8=", MimeType: "image/png"}},
+		StructuredContent: map[string]any{"key": "value"},
+	}
+	flags := &debugFlags{}
+	flags.runConfig.WorkingDir = t.TempDir()
+	require.NoError(t, flags.transformDebugToolResponse(cmd, a, nil, tools.Tool{Name: "test"}, "{}", result))
+	assert.Equal(t, "rewritten", result.Output)
+	assert.True(t, result.IsError)
+	assert.Equal(t, []tools.MediaContent{{Data: "aGVsbG8=", MimeType: "image/png"}}, result.Images)
+	assert.Equal(t, map[string]any{"key": "value"}, result.StructuredContent)
+	assert.Len(t, cfg.ToolResponseTransform, 1)
+	assert.Empty(t, cfg.SessionEnd)
+}
+
+func TestTransformDebugToolResponse_CanceledDuringHook(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("hook fixtures use POSIX shell commands")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cfg := &hooks.Config{ToolResponseTransform: []hooks.MatcherConfig{{Hooks: []hooks.Hook{{
+		Type: hooks.HookTypeCommand, Command: "touch hook-started; exec sleep 60",
+	}}}}}
+	a := agent.New("root", "", agent.WithHooks(cfg))
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+	cmd.SetErr(&out)
+	flags := &debugFlags{}
+	flags.runConfig.WorkingDir = t.TempDir()
+	result := tools.ResultSuccess("must not leak")
+	done := make(chan error, 1)
+	go func() {
+		done <- flags.transformDebugToolResponse(cmd, a, nil, tools.Tool{Name: "test"}, "{}", result)
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(flags.runConfig.WorkingDir, "hook-started"))
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	cancel()
+	err := <-done
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, out.String())
 }

@@ -793,7 +793,7 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 	if err := builtins.Register(r.hooksRegistry); err != nil {
 		return nil, fmt.Errorf("register builtin hooks: %w", err)
 	}
-	registerModelHook(r.hooksRegistry, r.providerRegistry)
+	RegisterModelHook(r.hooksRegistry, r.providerRegistry)
 	r.hooksRegistry.Register(hooks.HookTypeEvaluator, hooks.NewEvaluatorFactory(func(agentName, name string) (evaluator.Evaluator, bool) {
 		a, err := r.team.Agent(agentName)
 		if err != nil {

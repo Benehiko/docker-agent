@@ -5,10 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"uuid"
 
 	"github.com/spf13/cobra"
 
+	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/hooks"
+	"github.com/docker/docker-agent/pkg/hooks/builtins"
+	"github.com/docker/docker-agent/pkg/model/provider"
+	"github.com/docker/docker-agent/pkg/runtime"
+	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
@@ -36,34 +44,41 @@ func (f *debugFlags) runDebugToolCommand(cmd *cobra.Command, args []string) (com
 		return errors.New("parameters must be a JSON object, not null")
 	}
 
-	t, err := f.loadTeam(ctx, args[0])
+	loaded, err := f.loadTeamWithConfig(ctx, args[0])
 	if err != nil {
 		return err
 	}
+	t := loaded.Team
 	defer stopToolSets(ctx, t)
 
-	agent, err := t.AgentOrDefault(f.toolAgent)
+	a, err := t.AgentOrDefault(f.toolAgent)
 	if err != nil {
 		return err
 	}
 
 	// Include deferred tools: activation would otherwise be lost between CLI calls.
-	available, err := agent.ToolsWithCatalog(ctx)
-	for _, warning := range agent.DrainWarnings() {
+	available, err := a.ToolsWithCatalog(ctx)
+	for _, warning := range a.DrainWarnings() {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Warning:", warning)
 	}
 	if err != nil {
-		return fmt.Errorf("listing tools for agent %q: %w", agent.Name(), err)
+		return fmt.Errorf("listing tools for agent %q: %w", a.Name(), err)
 	}
 
 	index := slices.IndexFunc(available, func(tool tools.Tool) bool { return tool.Name == args[1] })
 	if index < 0 {
-		return fmt.Errorf("tool %q not found for agent %q; use 'debug toolsets --json' to list tools", args[1], agent.Name())
+		return fmt.Errorf("tool %q not found for agent %q; use 'debug toolsets --json' to list tools", args[1], a.Name())
 	}
 
-	result, err := callDebugTool(ctx, available[index], arguments)
+	tool := available[index]
+	result, err := callDebugTool(ctx, tool, arguments)
 	if err != nil {
 		return err
+	}
+	if !f.toolNoHook {
+		if err := f.transformDebugToolResponse(cmd, a, loaded.ProviderRegistry, tool, arguments, result); err != nil {
+			return err
+		}
 	}
 
 	if f.toolJSON {
@@ -75,7 +90,59 @@ func (f *debugFlags) runDebugToolCommand(cmd *cobra.Command, args []string) (com
 		return err
 	}
 	if result.IsError {
-		return fmt.Errorf("tool %q returned an error for agent %q", args[1], agent.Name())
+		return fmt.Errorf("tool %q returned an error for agent %q", args[1], a.Name())
+	}
+	return nil
+}
+
+func (f *debugFlags) transformDebugToolResponse(cmd *cobra.Command, a *agent.Agent, providers *provider.Registry, tool tools.Tool, arguments string, result *tools.ToolCallResult) error {
+	ctx := cmd.Context()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	workingDir := f.runConfig.WorkingDir
+	if workingDir == "" {
+		var err error
+		workingDir, err = os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolving hook working directory: %w", err)
+		}
+	}
+
+	cfg := &hooks.Config{}
+	if configured := a.Hooks(); configured != nil {
+		cfg.ToolResponseTransform = slices.Clone(configured.ToolResponseTransform)
+	}
+	cfg = builtins.ApplyAgentDefaults(cfg, builtins.AgentDefaults{RedactSecrets: a.RedactSecrets()})
+	registry := hooks.NewRegistry()
+	if err := builtins.Register(registry); err != nil {
+		return fmt.Errorf("registering builtin hooks: %w", err)
+	}
+	runtime.RegisterModelHook(registry, providers)
+	executor := hooks.NewExecutorWithRegistry(cfg, workingDir, nil, registry)
+	// Retain limiter spill files so printed paths remain usable after this command exits.
+	input := &hooks.Input{
+		SessionID:    "debug_" + uuid.NewV4().String(),
+		AgentName:    a.Name(),
+		ToolCategory: tool.Category,
+		ToolName:     tool.Name,
+		ToolUseID:    "debug_" + tool.Name,
+		ToolInput:    toolexec.ParseToolInput(arguments),
+		ToolResponse: result.Output,
+		ToolError:    result.IsError,
+	}
+	transformed, err := executor.Dispatch(ctx, hooks.EventToolResponseTransform, input)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("transforming tool %q response: %w", tool.Name, err)
+	}
+	if transformed.SystemMessage != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Warning:", transformed.SystemMessage)
+	}
+	if transformed.UpdatedToolResponse != nil {
+		result.Output = *transformed.UpdatedToolResponse
 	}
 	return nil
 }

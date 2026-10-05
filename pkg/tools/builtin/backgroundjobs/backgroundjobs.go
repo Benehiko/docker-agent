@@ -20,6 +20,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/safety"
 	"github.com/docker/docker-agent/pkg/shellpath"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -499,7 +500,7 @@ func formatBackgroundJobRecall(job *backgroundJob, status int32, exitCode int, o
 			result.WriteString("\n\n[Output truncated at 10MB limit]")
 		}
 	}
-	return result.String()
+	return builtins.BoundToolResult("background_jobs", ToolNameViewBackgroundJob, result.String(), "The retained output is available through view_background_job while this job exists.")
 }
 
 func reapSpawnedChild(cmd *exec.Cmd, pg *processGroup) {

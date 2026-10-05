@@ -2,6 +2,8 @@ package toolexec_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2096,4 +2098,37 @@ func TestDispatcher_NonInteractiveDefaultAskAutoDenies(t *testing.T) {
 	require.Len(t, em.responses, 1)
 	assert.True(t, em.responses[0].IsError)
 	assert.Contains(t, em.responses[0].Output, "non-interactive")
+}
+
+func TestDispatcherBoundsResultsAfterHooks(t *testing.T) {
+	t.Parallel()
+	for _, category := range []string{"shell", "background_jobs", "memory"} {
+		for _, useHook := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/hook=%t", category, useHook), func(t *testing.T) {
+				t.Parallel()
+				payload := strings.Repeat("x", 100_000)
+				tool := tools.Tool{Name: "output", Category: category, Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+					return tools.ResultError(payload), nil
+				}}
+				a := newAgent()
+				sess := session.New()
+				sess.ToolsApproved = true
+				d := &toolexec.Dispatcher{AgentFor: func(*session.Session) *agent.Agent { return a }}
+				if useHook {
+					d.Hooks = &stubHookDispatcher{on: map[hooks.EventType]*hooks.Result{hooks.EventToolResponseTransform: {UpdatedToolResponse: &payload}}}
+				}
+				em := &captureEmitter{}
+				d.Process(t.Context(), sess, []tools.ToolCall{{ID: "call", Function: tools.FunctionCall{Name: "output", Arguments: "{}"}}}, []tools.Tool{tool}, em)
+				require.Len(t, em.responses, 1)
+				require.Len(t, em.messages, 1)
+				assert.True(t, em.responses[0].IsError)
+				assert.Equal(t, em.responses[0].Output, em.messages[0].Message.Content)
+				if category == "memory" {
+					assert.Equal(t, payload, em.responses[0].Output)
+				} else {
+					assert.LessOrEqual(t, len(em.responses[0].Output), 50*1024)
+				}
+			})
+		}
+	}
 }

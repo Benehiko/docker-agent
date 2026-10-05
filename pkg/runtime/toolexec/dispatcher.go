@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/hooks"
+	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/safety"
 	"github.com/docker/docker-agent/pkg/session"
@@ -1153,7 +1154,7 @@ func (c *call) invoke(ctx context.Context, spanName string, exec func(ctx contex
 	// only paid when at least one hook is configured for the event, so
 	// agents that haven't opted into output rewriting take the cheap
 	// path through Dispatch's `exec.Has(event)` short-circuit.
-	res.Output = c.applyToolResponseTransform(ctx, res.Output, false)
+	res.Output = c.applyToolResponseTransform(ctx, res.Output, res.IsError)
 
 	// gen_ai.tool.call.result captures the post-transform output so the
 	// span matches what the LLM actually saw on the next turn (any
@@ -1181,7 +1182,10 @@ func (c *call) invoke(ctx context.Context, spanName string, exec func(ctx contex
 // record, post_tool_use — so a single rewrite covers the UI feed,
 // the persisted session file, the input the post_tool_use hook sees,
 // and the messages going to the next LLM call.
-func (c *call) applyToolResponseTransform(ctx context.Context, payload string, isError bool) string {
+func (c *call) applyToolResponseTransform(ctx context.Context, payload string, isError bool) (output string) {
+	defer func() {
+		output = builtins.BoundToolResult(c.tool.Category, c.tool.Name, output, "The full result was not saved by the output limiter; narrow the tool query to retrieve the part you need.")
+	}()
 	if c.d.Hooks == nil {
 		return payload
 	}

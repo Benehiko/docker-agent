@@ -55,23 +55,20 @@ func limitLargeToolResponse(ctx context.Context, in *hooks.Input) (*hooks.Output
 	path, err := writeLargeToolResult(in.SessionID, payload)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to write large tool call result to temp file", "error", err)
-		return nil, nil
+		path = ""
 	}
 
 	var updated string
-	if in.ToolCategory == filesystemToolCategory && in.ToolName == readFileToolName {
+	switch {
+	case path == "":
+		updated = BoundToolResult(in.ToolCategory, in.ToolName, payload, "The full result could not be saved; narrow the tool query to retrieve the part you need.")
+		if updated == payload { // A line-count-only overflow still needs an excerpt.
+			updated = tailToolResultNotice(in.ToolCategory, payload, "The full result could not be saved.\n\n")
+		}
+	case in.ToolCategory == filesystemToolCategory && in.ToolName == readFileToolName:
 		updated = readFileHeadNotice(in.ToolInput, payload, path)
-	} else {
-		tail := tailLargeToolResult(payload)
-		updated = fmt.Sprintf(
-			"Tool call result was too large (%d bytes; limit %d bytes). The full result is available in a file: %s\n\nShowing the last %d lines (up to %d bytes):\n\n%s",
-			len(payload),
-			maxToolCallResultBytes,
-			path,
-			largeToolCallResultTailLines,
-			largeToolCallResultTailBytes,
-			tail,
-		)
+	default:
+		updated = tailToolResultNotice(in.ToolCategory, payload, largeToolResultNotice(payload)+fmt.Sprintf(" The full result is available in a file: %s\n\n", path))
 	}
 
 	return &hooks.Output{
@@ -92,23 +89,34 @@ func limitLargeToolResponse(ctx context.Context, in *hooks.Input) (*hooks.Output
 // instead of suggesting a call that would loop on the same line.
 func readFileHeadNotice(toolInput map[string]any, payload, path string) string {
 	head := headLargeToolResult(payload)
+	for {
+		notice := readFileHeadNoticeForExcerpt(toolInput, payload, path, head)
+		if len(notice) <= maxToolCallResultBytes {
+			return notice
+		}
+		if head == "" {
+			return boundedExcerpt(notice, "", true)
+		}
+		head = string(trimToRuneEnd([]byte(head[:max(0, len(head)-(len(notice)-maxToolCallResultBytes))])))
+	}
+}
+
+func readFileHeadNoticeForExcerpt(toolInput map[string]any, payload, path, head string) string {
 	if !strings.Contains(head, "\n") {
 		return fmt.Sprintf(
-			"Tool call result was too large (%d bytes; limit %d bytes). The full result is available in a file: %s\n\nShowing the first %d bytes. The first line of this result alone exceeds the excerpt limit, so read_file's line-based \"line\"/\"limit\" arguments cannot advance within it, and reading the file above with read_file would be truncated the same way. To read beyond this excerpt, use a tool or command that can read byte ranges (for example a shell command) on that file:\n\n%s",
-			len(payload),
-			maxToolCallResultBytes,
+			"%s The full result is available in a file: %s\n\nShowing the first %d bytes. The first line of this result alone exceeds the excerpt limit, so read_file's line-based \"line\"/\"limit\" arguments cannot advance within it, and reading the file above with read_file would be truncated the same way. To read beyond this excerpt, use a tool or command that can read byte ranges (for example a shell command) on that file:\n\n%s",
+			largeToolResultNotice(payload),
 			path,
 			len(head),
 			head,
 		)
 	}
 	return fmt.Sprintf(
-		"Tool call result was too large (%d bytes; limit %d bytes). The full result is available in a file: %s\n\nShowing the first %d lines (up to %d bytes). To continue reading, call read_file again with the same path plus \"line\": %d (1-based start line) and a \"limit\" (maximum number of lines):\n\n%s",
-		len(payload),
-		maxToolCallResultBytes,
+		"%s The full result is available in a file: %s\n\nShowing the first %d lines (up to %d bytes). To continue reading, call read_file again with the same path plus \"line\": %d (1-based start line) and a \"limit\" (maximum number of lines):\n\n%s",
+		largeToolResultNotice(payload),
 		path,
-		largeToolCallResultTailLines,
-		largeToolCallResultTailBytes,
+		lineCount(head),
+		len(head),
 		nextReadFileLine(toolInput, head),
 		head,
 	)

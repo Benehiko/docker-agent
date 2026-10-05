@@ -44,8 +44,9 @@ func TestReliableSubscriberRetainsFinalResponseWhenStalled(t *testing.T) {
 		)
 		for _, msg := range want {
 			a.sendEvent(ctx, msg)
+			// Drain the best-effort witness while the reliable subscriber stays blocked.
+			synctest.Wait()
 		}
-		synctest.Wait()
 		require.Equal(t, want, witness, "a stalled TUI must not block other subscribers")
 
 		close(resume)

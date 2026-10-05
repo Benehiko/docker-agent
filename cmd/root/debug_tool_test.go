@@ -41,7 +41,8 @@ agents:
   helper:
     model: test
     toolsets:
-      - type: shell
+      - type: filesystem
+        tools: [read_multiple_files]
         defer: true
 models:
   test:
@@ -111,8 +112,8 @@ func TestDebugToolCommand(t *testing.T) {
 		{
 			name:   "selected agent and deferred tool",
 			flags:  debugFlags{toolAgent: "helper"},
-			args:   []string{"shell", `{"cmd":"echo hello"}`},
-			output: "hello\n",
+			args:   []string{"read_multiple_files", `{"paths":["hello.txt"]}`},
+			output: "=== hello.txt ===\nhello from a tool\n",
 		},
 		{
 			name:  "unknown agent",
@@ -122,8 +123,8 @@ func TestDebugToolCommand(t *testing.T) {
 		},
 		{
 			name: "tool belongs to another agent",
-			args: []string{"shell"},
-			err:  `tool "shell" not found for agent "root"`,
+			args: []string{"read_multiple_files"},
+			err:  `tool "read_multiple_files" not found for agent "root"`,
 		},
 		{
 			name: "filtered tool",
@@ -390,18 +391,18 @@ func TestDebugToolsetsCommand_IncludesDeferredTools(t *testing.T) {
 	var infos []agentToolsInfo
 	require.NoError(t, json.Unmarshal(out.Bytes(), &infos))
 	require.Len(t, infos, 2)
+	found := false
 	for _, info := range infos {
-		if info.Agent != "helper" {
-			continue
-		}
 		for _, tool := range info.Tools {
-			if tool.Name == "shell" {
-				assert.NotNil(t, tool.Parameters)
-				return
+			if tool.Name != "read_multiple_files" {
+				continue
 			}
+			assert.Equal(t, "helper", info.Agent, "deferred tool belongs only to the selected agent")
+			assert.NotNil(t, tool.Parameters)
+			found = true
 		}
 	}
-	t.Fatal("deferred shell tool must be discoverable")
+	require.True(t, found, "deferred filesystem tool must be discoverable")
 }
 
 func TestCallDebugTool_CanceledWriteFile(t *testing.T) {

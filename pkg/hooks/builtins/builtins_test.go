@@ -32,6 +32,7 @@ func TestRegisterInstallsAllBuiltins(t *testing.T) {
 
 	for _, name := range []string{
 		builtins.AddContext,
+		builtins.TransformJSON,
 		builtins.AddDate,
 		builtins.AddEnvironmentInfo,
 		builtins.AddPromptFiles,

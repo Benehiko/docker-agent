@@ -291,6 +291,7 @@ Built-ins are typically zero-config and faster than equivalent shell hooks becau
 | `max_iterations`        | `before_llm_call`                                                                         | `["<N>"]` (required)  | Hard-stops the agent after `N` model calls. Stateless: the runtime supplies the iteration counter on every dispatch.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `snapshot`              | `session_start`, `turn_start`, `turn_end`, `pre_tool_use`, `post_tool_use`, `session_end` | _none_                | Records filesystem snapshots in a shadow git repo under the Docker Agent data directory. No-op outside git repos; respects the source repo's ignore rules and skips newly-added files larger than 2 MiB.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `redact_secrets`        | `tool_input_transform`, `before_llm_call`, `tool_response_transform`                              | _none_                | Scrubs detected secrets (API keys, tokens, private keys, …) out of tool call arguments, outgoing chat content, and tool output. The same builtin handles all three events and dispatches on the event name. Auto-registered on all three events by `redact_secrets: true` on the agent — see [`examples/redact_secrets_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/redact_secrets_hooks.yaml) for the manual wiring.                                                                                                                                                                                     |
+| `transform_json` | `tool_response_transform` | JSON field names | Keeps only the named top-level fields of a JSON object. Nested values are preserved; missing fields are omitted. No expression language or domain validation. |
 | `limit_large_tool_results` | `tool_response_transform`, `session_end`                                               | _none_                | **Always-on safety hook** — automatically injected by the runtime, no configuration required. When a tool result from the `filesystem`, `shell`, `mcp`, or `a2a` categories exceeds 2,000 lines or 50 KiB, the full payload is written to a per-session temp file and replaced in the conversation with a notice plus a bounded excerpt (2,000 lines, up to 50 KiB): the tail for most tools, but the head for the built-in filesystem `read_file`, whose notice suggests a follow-up call with `line`/`limit` to continue reading. The `session_end` leg deletes the temp directory. Internal toolsets (`memory`, `plan`, `tasks`, `think`, …) are not affected. |
 | `http_post`             | Any event                                                                                 | `[URL, body]`          | Sends an HTTP POST request with the optional body in `args[1]` to the URL in `args[0]`. Missing or empty URLs are ignored; only HTTP(S) destinations are accepted, using an SSRF-safe transport. |
 | `safer_shell`           | `pre_tool_use`                                                                            | _none_                | **Deprecated compatibility shim.** The runtime now classifies every shell command natively (`safe` / `destructive` / `unknown`) and gates it through the session's [safety mode](../permissions/index.md#safety-modes), so this builtin no longer emits verdicts. Pinned entries keep working as pure labellers that attach classification metadata (`safety_label`, `blast_radius`, `category`, `reason`) to the call. Filters by tool name internally (no-op for calls other than `shell` and `run_background_job`). |
@@ -1559,3 +1560,26 @@ or later filesystem/shell reads of nested files. Keep tool permissions and
 sandboxing in place; an LLM judge is not a proof of safety.
 
 See [the prompt-file guard example](https://github.com/docker/docker-agent/blob/main/examples/prompt_file_guard.yaml).
+
+## Trim JSON tool responses
+
+The `transform_json` builtin keeps the top-level fields listed in `args`:
+
+```yaml
+agents:
+  root:
+    model: openai/gpt-4.1
+    hooks:
+      tool_response_transform:
+        - matcher: pokemon_retrieve
+          hooks:
+            - type: builtin
+              command: transform_json
+              args: [name, types, stats]
+```
+
+Nested objects and arrays are kept as supplied. Missing fields are omitted, not
+filled in. This only trims output; it does not validate facts or tool arguments.
+Tool errors and hooks without arguments are left unchanged. Non-object or
+malformed JSON reports a hook error and leaves the original response unchanged
+under the default `on_error: warn` policy.

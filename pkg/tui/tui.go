@@ -874,7 +874,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.MouseMotionMsg); !ok {
 		m.hasPointer = false
 	}
-	if _, isTick := msg.(animation.TickMsg); !isTick {
+	if _, isTick := msg.(animation.TickMsg); !isTick && !m.canReuseUsageView(msg) {
 		m.viewCacheValid = false
 	}
 	// In lean mode, silently drop messages for features that don't exist.
@@ -2524,6 +2524,18 @@ func (m *appModel) switchFocus() (tea.Model, tea.Cmd) {
 		return m, m.activeTab.editor.Focus()
 	}
 	return m, nil
+}
+
+func (m *appModel) canReuseUsageView(msg tea.Msg) bool {
+	// Usage only changes accounting and sidebar state; dialogs may show live costs.
+	if (!m.leanMode && !m.hideSidebar) || m.dialogMgr.Open() {
+		return false
+	}
+	if routed, ok := msg.(messages.RoutedMsg); ok {
+		msg = routed.Inner
+	}
+	_, ok := msg.(*runtime.TokenUsageEvent)
+	return ok
 }
 
 func sidebarVisualGeneration(page chat.Page) uint64 {

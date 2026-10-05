@@ -45,6 +45,7 @@ func (c *Client) hostedToolSearchTools(ctx context.Context, requestTools []tools
 		if err != nil {
 			return nil, nil, err
 		}
+		tools.OrderedSchemaProperties(parameters)
 		hosted = append(hosted, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
 			Name:         tool.Name,
 			Description:  param.NewOpt(tool.Description),

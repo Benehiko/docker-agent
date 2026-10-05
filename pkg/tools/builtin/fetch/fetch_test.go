@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -60,7 +61,10 @@ func TestFetchTool_Tools(t *testing.T) {
 
 	schema, err := json.Marshal(fetchTool.Parameters)
 	require.NoError(t, err)
+	assert.Less(t, bytes.Index(schema, []byte(`"urls":`)), bytes.Index(schema, []byte(`"format":`)))
+	assert.Less(t, bytes.Index(schema, []byte(`"format":`)), bytes.Index(schema, []byte(`"timeout":`)))
 	assert.JSONEq(t, `{
+	"additionalProperties": false,
 	"type": "object",
 	"properties": {
 		"format": {

@@ -165,7 +165,7 @@ func ResultJSONWithOptions(v any, opts JSONResultOptions) *ToolCallResult {
 
 type ToolType string
 
-type Tool struct {
+type Tool struct { //nolint:recvcheck // JSON marshaling needs a value receiver for slice elements; unmarshaling needs a pointer.
 	Name         string          `json:"name"`
 	Category     string          `json:"category"`
 	Description  string          `json:"description,omitempty"`

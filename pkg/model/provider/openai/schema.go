@@ -2,7 +2,6 @@ package openai
 
 import (
 	"iter"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -253,7 +252,8 @@ func makeAllRequired(schema shared.FunctionParameters) shared.FunctionParameters
 		}
 
 		newRequired := []any{}
-		for _, propName := range slices.Sorted(maps.Keys(properties)) {
+		propertyOrder := tools.SchemaPropertyNames(node)
+		for _, propName := range propertyOrder {
 			newRequired = append(newRequired, propName)
 			if !originallyRequired[propName] {
 				if propMap, ok := properties[propName].(map[string]any); ok {

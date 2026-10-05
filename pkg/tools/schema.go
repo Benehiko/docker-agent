@@ -2,36 +2,61 @@ package tools
 
 import (
 	"encoding/json"
+	"reflect"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-func MustSchemaFor[T any]() any {
-	schema, err := SchemaFor[T]()
+func MustSchemaFor[T any](customize ...func(*jsonschema.Schema)) any {
+	schema, err := SchemaFor[T](customize...)
 	if err != nil {
 		panic(err)
 	}
 	return schema
 }
 
-func SchemaFor[T any]() (any, error) {
+func SchemaFor[T any](customize ...func(*jsonschema.Schema)) (any, error) {
 	schema, err := jsonschema.For[T](&jsonschema.ForOptions{})
 	if err != nil {
 		return nil, err
 	}
-	return schema, nil
+	for _, customize := range customize {
+		customize(schema)
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var ordered map[string]any
+	if err := json.Unmarshal(data, &ordered); err != nil {
+		return nil, err
+	}
+	recordDeclarationOrder(ordered, reflect.TypeFor[T]())
+	return schemaWithOrder(ordered), nil
 }
 
 func SchemaToMap(params any) (map[string]any, error) {
 	m := map[string]any{}
 	if params != nil {
+		if ordered, ok := params.(schemaWithOrder); ok {
+			params = map[string]any(ordered)
+		}
 		buf, err := json.Marshal(params)
 		if err != nil {
 			return nil, err
 		}
 
-		if err := json.Unmarshal(buf, &m); err != nil {
-			return nil, err
+		switch params.(type) {
+		case map[string]any:
+			if err := json.Unmarshal(buf, &m); err != nil {
+				return nil, err
+			}
+		default:
+			var err error
+			m, err = decodeSchema(buf)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -217,6 +242,7 @@ func ConvertSchema(params, v any) error {
 	}
 
 	// Then another JSON marshal/unmarshal roundtrip to the destination type
+	OrderedSchemaProperties(m)
 	buf, err := json.Marshal(m)
 	if err != nil {
 		return err

@@ -665,7 +665,25 @@ func ConvertParametersToSchema(params any) (*genai.Schema, error) {
 		return nil, err
 	}
 
+	applyPropertyOrdering(schema, m)
 	return schema, nil
+}
+
+func applyPropertyOrdering(schema *genai.Schema, source map[string]any) {
+	if schema == nil {
+		return
+	}
+	schema.PropertyOrdering = tools.SchemaPropertyNames(source)
+	if properties, ok := source["properties"].(map[string]any); ok {
+		for name, child := range properties {
+			if child, ok := child.(map[string]any); ok {
+				applyPropertyOrdering(schema.Properties[name], child)
+			}
+		}
+	}
+	if items, ok := source["items"].(map[string]any); ok {
+		applyPropertyOrdering(schema.Items, items)
+	}
 }
 
 // normalizeBooleanSchemas recursively replaces JSON Schema boolean sub-schemas

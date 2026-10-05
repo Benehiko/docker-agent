@@ -440,6 +440,7 @@ func (c *Client) CreateChatCompletionStream(
 				slog.DebugContext(ctx, "Failed to convert tool parameters to OpenAI schema", "tool_name", tool.Name, "error", err)
 				return nil, err
 			}
+			tools.OrderedSchemaProperties(parameters)
 
 			toolsParam[i] = openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 				Name:        tool.Name,
@@ -600,6 +601,7 @@ func injectDeferredToolLoads(input []responses.ResponseInputItemUnionParam, requ
 			if err != nil {
 				return nil, err
 			}
+			tools.OrderedSchemaProperties(parameters)
 			loaded = append(loaded, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
 				Name:         tool.Name,
 				Description:  param.NewOpt(tool.Description),
@@ -692,6 +694,7 @@ func (c *Client) CreateResponseStream(
 				slog.DebugContext(ctx, "Failed to convert tool parameters to OpenAI schema", "tool_name", tool.Name, "error", err)
 				return nil, err
 			}
+			tools.OrderedSchemaProperties(parameters)
 
 			functionTool := &responses.FunctionToolParam{
 				Name:        tool.Name,

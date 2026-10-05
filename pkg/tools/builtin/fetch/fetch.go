@@ -13,6 +13,7 @@ import (
 	"time"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/k3a/html2text"
 	"github.com/temoto/robotstxt"
 	"go.opentelemetry.io/otel/attribute"
@@ -52,9 +53,9 @@ type fetchHandler struct {
 }
 
 type ToolArgs struct {
-	URLs    []string `json:"urls"`
-	Timeout int      `json:"timeout,omitempty"`
-	Format  string   `json:"format,omitempty"`
+	URLs    []string `json:"urls" jsonschema:"URLs to fetch"`
+	Format  string   `json:"format" jsonschema:"Output format"`
+	Timeout int      `json:"timeout,omitempty" jsonschema:"Request timeout in seconds (default: 30)"`
 }
 
 // sanitizeFetchURLs strips query strings and userinfo from each URL so
@@ -620,31 +621,14 @@ func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
 			Name:        ToolNameFetch,
 			Category:    "fetch",
 			Description: "Fetch HTTP/HTTPS URLs; return response bodies and metadata.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"urls": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "string",
-						},
-						"description": "URLs to fetch",
-						"minItems":    1,
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"description": "Output format",
-						"enum":        []string{"text", "markdown", "html"},
-					},
-					"timeout": map[string]any{
-						"type":        "integer",
-						"description": "Request timeout in seconds (default: 30)",
-						"minimum":     1,
-						"maximum":     300,
-					},
-				},
-				"required": []string{"urls", "format"},
-			},
+			Parameters: tools.MustSchemaFor[ToolArgs](func(schema *jsonschema.Schema) {
+				schema.Properties["urls"].Type = "array"
+				schema.Properties["urls"].Types = nil
+				schema.Properties["urls"].MinItems = new(1)
+				schema.Properties["format"].Enum = []any{"text", "markdown", "html"}
+				schema.Properties["timeout"].Minimum = new(1.0)
+				schema.Properties["timeout"].Maximum = new(300.0)
+			}),
 			OutputSchema: tools.MustSchemaFor[string](),
 			Handler:      tools.NewHandler(t.handler.CallTool),
 			Annotations: tools.ToolAnnotations{

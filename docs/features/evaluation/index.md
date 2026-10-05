@@ -253,7 +253,7 @@ $ docker agent eval <agent-file>|<registry-ref> [<eval-dir>|./evals]
 | Flag                | Default                     | Description                                                       |
 | ------------------- | --------------------------- | ----------------------------------------------------------------- |
 | `-c, --concurrency` | num CPUs                    | Number of concurrent evaluation runs                              |
-| `--judge-model`     | `anthropic/claude-opus-5` | Model for LLM-as-a-judge relevance scoring                        |
+| `--judge-model`     | `openai/gpt-5.6-terra` | Model for LLM-as-a-judge relevance scoring                        |
 | `--output`          | `<eval-dir>/results`  | Directory for results, logs, and session databases                |
 | `--only`            | (all)                       | Only run evals with file names matching these patterns            |
 | `--base-image`      | (default)                   | Custom base image for eval containers (see [Custom Base Images](#custom-base-images)) |

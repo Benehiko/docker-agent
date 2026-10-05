@@ -143,6 +143,7 @@ func TestEmptyResponseWithoutUsageIsSkipped(t *testing.T) {
 		assert.IsNotType(t, &MessageAddedEvent{}, event)
 		if event, ok := event.(*TokenUsageEvent); ok {
 			assert.Nil(t, event.Usage.LastMessage)
+			assert.True(t, event.AssistantMessageEmpty, "empty completion is visible without token usage")
 		}
 	}
 }

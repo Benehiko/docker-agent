@@ -75,6 +75,7 @@ type Config struct {
 	AutoApprove    bool
 	HideToolCalls  bool
 	OutputJSON     bool
+	Last           bool
 }
 
 // Run executes an agent in non-TUI mode, handling user input and runtime events.
@@ -98,6 +99,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 	// If the last received event was an error, return it. That way the exit code
 	// will be non-zero if the agent failed.
 	var lastErr error
+	var last lastResponse
 
 	oneLoop := func(text string, rd io.Reader) error {
 		autoExtensions := 0
@@ -115,6 +117,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			// Agent-only command with no content - agent switched but no message to send
 			return nil
 		}
+		if cfg.Last {
+			last = lastResponse{sessionID: sess.ID}
+		}
 		sess.AddMessage(userMsg)
 		sess.AddAttachedFile(attachedPath)
 
@@ -127,8 +132,11 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			}
 		}()
 
-		if cfg.OutputJSON {
+		if cfg.OutputJSON || cfg.Last {
 			for event := range events {
+				if cfg.Last {
+					last.observe(event)
+				}
 				switch e := event.(type) {
 				case *runtime.ToolCallConfirmationEvent:
 					// JSON mode has no user at stdin — reject unconditionally.
@@ -144,10 +152,17 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 						rt.Resume(runCtx, runtime.ResumeApprove())
 					default: // maxIterStop or maxIterPrompt (no interactive prompt in JSON mode)
 						rt.Resume(runCtx, runtime.ResumeReject(""))
+						if cfg.Last {
+							return errors.New("agent produced no final answer: max iterations reached")
+						}
 						return nil
 					}
 				case *runtime.ErrorEvent:
 					return fmt.Errorf("%s", e.Error)
+				}
+
+				if cfg.Last {
+					continue
 				}
 
 				buf, err := json.Marshal(event)
@@ -157,6 +172,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				out.Println(string(buf))
 			}
 
+			if cfg.Last {
+				return last.validate()
+			}
 			return nil
 		}
 
@@ -324,6 +342,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		}
 	default:
 		// No messages: interactive prompt loop
+		if cfg.Last {
+			return errors.New("--last requires a message argument or piped input")
+		}
 		out.PrintWelcomeMessage(cfg.AppName)
 		firstQuestion := true
 		for {
@@ -348,6 +369,12 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 	// Wrap runtime errors to prevent duplicate error messages and usage display
 	if lastErr != nil {
 		return RuntimeError{Err: lastErr}
+	}
+	if cfg.Last {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return last.print(out.out, cfg.OutputJSON)
 	}
 	return nil
 }

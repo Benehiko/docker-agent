@@ -27,6 +27,7 @@ import (
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/input"
 	"github.com/docker/docker-agent/pkg/leantui"
+	"github.com/docker/docker-agent/pkg/model/provider/dmr"
 	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/profiling"
 	"github.com/docker/docker-agent/pkg/runtime"
@@ -107,6 +108,8 @@ type runExecFlags struct {
 	exec          bool
 	hideToolCalls bool
 	outputJSON    bool
+	last          bool
+	diagnostics   *cli.Printer
 
 	// Run only
 	hideToolResults bool
@@ -255,6 +258,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().BoolVar(&flags.exec, "exec", false, "Execute without a TUI")
 	cmd.PersistentFlags().BoolVar(&flags.hideToolCalls, "hide-tool-calls", false, "Hide the tool calls in the output")
 	cmd.PersistentFlags().BoolVar(&flags.outputJSON, "json", false, "Output results in JSON format")
+	cmd.PersistentFlags().BoolVar(&flags.last, "last", false, "Print only the final agent answer (requires --exec); with --json, emit a JSON value")
 }
 
 func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (commandErr error) {
@@ -270,6 +274,14 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		defer func() { // do not inline this defer so that commandErr is not resolved early
 			telemetry.TrackCommandError(ctx, "run", args, commandErr)
 		}()
+	}
+
+	if f.last && !f.exec {
+		return errors.New("--last requires --exec")
+	}
+	f.diagnostics = cli.NewPrinter(cmd.ErrOrStderr())
+	if f.last {
+		ctx = dmr.WithPullOutput(ctx, cmd.ErrOrStderr())
 	}
 
 	// Validate an explicit --theme value early so a typo fails fast with a
@@ -357,7 +369,11 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 	if discoveredProjectConfig {
-		out.Println("Using project config: " + args[0])
+		if f.last {
+			fmt.Fprintln(cmd.ErrOrStderr(), "Using project config: "+args[0])
+		} else {
+			out.Println("Using project config: " + args[0])
+		}
 	}
 
 	if f.sandboxOptions.Cloud {
@@ -397,6 +413,13 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 }
 
 func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []string, useTUI bool) error {
+	statusOut := out
+	if f.last {
+		statusOut = f.diagnostics
+		if statusOut == nil {
+			statusOut = cli.NewPrinter(os.Stderr)
+		}
+	}
 	slog.DebugContext(ctx, "Starting agent", "agent", f.agentName)
 
 	// Start profiling if requested
@@ -460,7 +483,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 				slog.ErrorContext(ctx, "Failed to cleanup recording proxy", "error", err)
 			}
 		}()
-		out.Println("Recording mode enabled, cassette: " + cassettePath)
+		statusOut.Println("Recording mode enabled, cassette: " + cassettePath)
 	}
 
 	b, err := f.selectBackend(agentFileName)
@@ -483,7 +506,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		if loadResult != nil {
 			stopToolSets(ctx, loadResult.Team)
 		}
-		out.Println("Dry run mode enabled. Agent initialized but will not execute.")
+		statusOut.Println("Dry run mode enabled. Agent initialized but will not execute.")
 		return nil
 	}
 
@@ -515,12 +538,12 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return err
 	}
 	if createdWorktree != nil {
-		out.Println("Using git worktree: " + createdWorktree.Dir + " (branch " + createdWorktree.Branch + ")")
+		statusOut.Println("Using git worktree: " + createdWorktree.Dir + " (branch " + createdWorktree.Branch + ")")
 		// loadResult is nil for the remote backend; worktrees are mutually
 		// exclusive with --remote so this is belt-and-suspenders, matching
 		// the nil-guard used for cleanup throughout this function.
 		if loadResult != nil {
-			if err := f.dispatchWorktreeCreate(ctx, out, loadResult.Team, createdWorktree); err != nil {
+			if err := f.dispatchWorktreeCreate(ctx, statusOut, loadResult.Team, createdWorktree); err != nil {
 				stopToolSets(ctx, loadResult.Team)
 				return err
 			}
@@ -1075,6 +1098,7 @@ func (f *runExecFlags) execCLIConfig(sess *session.Session) cli.Config {
 		AttachmentPath: f.attachmentPath,
 		HideToolCalls:  f.hideToolCalls,
 		OutputJSON:     f.outputJSON,
+		Last:           f.last,
 		AutoApprove:    sess.GetSafetyPolicy() == session.SafetyPolicyAutonomous,
 	}
 }

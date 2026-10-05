@@ -46,7 +46,8 @@ $ docker agent run [config] [message...] [flags]
 | `--disable-commands <list>`             | Hide and disable specific slash commands in the TUI. Accepts a comma-separated list of command names (leading slash optional, case-insensitive). E.g. `--disable-commands="/cost,/eval,/model"`. |
 | `--theme <name>`                        | Preselect a TUI theme by name, or `auto` to follow the terminal's light/dark background (overrides the theme from user config; ignored outside the interactive TUI) |
 | `--on-event <type>=<cmd>`               | Run a shell command when an event of the given type fires (`*=<cmd>` matches any event). Repeatable.                                      |
-| `--json`                                | Output results as newline-delimited JSON (use with `--exec`)                                                                              |
+| `--json`                                | Output results as newline-delimited JSON (use with `--exec`); with `--last`, output only the final answer as a JSON value                    |
+| `--last`                                | Print only the final agent answer after all turns finish (requires `--exec`); omit thinking, tool calls/results, and intermediate responses |
 | `--hide-tool-calls`                     | Hide tool calls in the output                                                                                                             |
 | `--hide-tool-results`                   | Hide tool call results in the output                                                                                                      |
 | `--sandbox`                             | Run the agent in sandbox mode using `sbx` (see [Sandbox](../../configuration/sandbox/index.md))                                 |
@@ -172,7 +173,17 @@ $ docker agent run --exec agent.yaml --yolo "Set up CI/CD pipeline"
 
 # Multi-turn conversation
 $ docker agent run --exec agent.yaml "question 1" "question 2" "question 3"
+
+# Only the final answer (no transcript)
+$ docker agent run --exec --last agent.yaml "Summarize this repository"
+
+# Only the final answer as a JSON value
+$ docker agent run --exec --last --json agent.yaml "Generate a report"
 ```
+
+`--last` buffers the answer until all supplied messages have been processed, then prints only the final response from the last turn. It requires a message argument or piped input and does not prompt for tool approvals or elicitation: pending requests are declined, as in `--json` mode. Configure permissions or a safety mode for unattended tool use. Errors fail the command without printing a partial answer.
+
+With `--last --json`, a valid JSON answer is emitted directly (not wrapped in a runtime event or double-encoded); a plain-text answer is encoded as a JSON string. Without `--json`, the answer is printed as text, including any structured JSON the agent produced. `--json` without `--last` still emits the full NDJSON event stream.
 
 ### `docker agent new`
 

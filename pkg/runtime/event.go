@@ -3,6 +3,7 @@ package runtime
 import (
 	"cmp"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/chat"
@@ -415,9 +416,10 @@ func ModelFallback(agentName, failedModel, fallbackModel, reason string, attempt
 type TokenUsageEvent struct {
 	AgentContext
 
-	Type      string `json:"type"`
-	SessionID string `json:"session_id"`
-	Usage     *Usage `json:"usage"`
+	Type                  string `json:"type"`
+	SessionID             string `json:"session_id"`
+	Usage                 *Usage `json:"usage"`
+	AssistantMessageEmpty bool   `json:"assistant_message_empty,omitempty"`
 }
 
 type Usage struct {
@@ -1216,16 +1218,23 @@ type MessageAddedEvent struct {
 	Type      string           `json:"type"`
 	SessionID string           `json:"session_id"`
 	Message   *session.Message `json:"-"`
+	// Completion metadata remains available when Message is omitted on the wire.
+	AssistantMessageEmpty bool `json:"assistant_message_empty,omitempty"`
+	HasToolCalls          bool `json:"has_tool_calls,omitempty"`
 }
 
 func (e *MessageAddedEvent) GetSessionID() string { return e.SessionID }
 
 func MessageAdded(sessionID string, msg *session.Message, agentName string) Event {
+	emptyAssistant := msg != nil && !msg.Implicit && msg.Message.Role == chat.MessageRoleAssistant && strings.TrimSpace(msg.Message.Content) == ""
+	hasToolCalls := msg != nil && !msg.Implicit && msg.Message.Role == chat.MessageRoleAssistant && (len(msg.Message.ToolCalls) > 0 || msg.Message.FunctionCall != nil)
 	return &MessageAddedEvent{
-		Type:         "message_added",
-		SessionID:    sessionID,
-		Message:      msg,
-		AgentContext: newAgentContext(agentName),
+		Type:                  "message_added",
+		SessionID:             sessionID,
+		Message:               msg,
+		AssistantMessageEmpty: emptyAssistant,
+		HasToolCalls:          hasToolCalls,
+		AgentContext:          newAgentContext(agentName),
 	}
 }
 

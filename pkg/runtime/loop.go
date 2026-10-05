@@ -1032,7 +1032,9 @@ func (r *LocalRuntime) runTurn(
 
 	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
-	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
+	usageEvent := NewTokenUsageEvent(sess.ID, a.Name(), usage).(*TokenUsageEvent)
+	usageEvent.AssistantMessageEmpty = strings.TrimSpace(res.Content) == "" && len(res.Calls) == 0
+	events.Emit(usageEvent)
 	if res.ProviderState != nil && res.ProviderState.CacheDiagnostics != nil {
 		d := res.ProviderState.CacheDiagnostics
 		if d.MissedInputTokens > 0 {

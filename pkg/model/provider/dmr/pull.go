@@ -18,17 +18,28 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/dmr/dmrmodels"
 )
 
+type pullOutputKey struct{}
+
+// WithPullOutput redirects automatic model-pull diagnostics and progress.
+func WithPullOutput(ctx context.Context, out io.Writer) context.Context {
+	return context.WithValue(ctx, pullOutputKey{}, out)
+}
+
 func pullDockerModelIfNeeded(ctx context.Context, model string) error {
 	if modelExists(ctx, model) {
 		slog.DebugContext(ctx, "Model already exists, skipping pull", "model", model)
 		return nil
 	}
 
-	if err := confirmModelPull(ctx, model, os.Stdout); err != nil {
+	out := io.Writer(os.Stdout)
+	if configured, ok := ctx.Value(pullOutputKey{}).(io.Writer); ok {
+		out = configured
+	}
+	if err := confirmModelPull(ctx, model, out); err != nil {
 		return err
 	}
 
-	return pullWithRecovery(ctx, model, os.Stdout, os.Stderr)
+	return pullWithRecovery(ctx, model, out, os.Stderr)
 }
 
 // Pull pulls a Docker Model Runner model via `docker model pull`, streaming

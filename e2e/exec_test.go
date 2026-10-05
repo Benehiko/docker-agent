@@ -29,9 +29,7 @@ func TestExec_OpenAI_WithThinkingBudget(t *testing.T) {
 	t.Parallel()
 	out := runCLI(t, "run", "--exec", "testdata/basic_with_thinking.yaml", "What's 2+2?")
 
-	// With thinking_budget explicitly configured, response should include reasoning
-	// The output format includes the reasoning summary when thinking is enabled
-	require.Contains(t, out, "4")
+	require.Contains(t, out, "\n\n4")
 }
 
 func TestExec_OpenAI_ToolCall(t *testing.T) {

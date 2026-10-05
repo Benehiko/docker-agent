@@ -3,6 +3,82 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.147.0] - 2026-10-05
+
+This release adds hook-driven agent routing, a lean TUI settings panel, codemode tool call visibility, and several new CLI and eval capabilities, alongside a broad set of bug fixes for assistant message handling, DMR routing, and TUI rendering.
+
+## What's New
+
+- Adds a `/settings` command to the lean TUI with an inline settings panel supporting keyboard navigation, save/cancel, and persistence of preferences
+- Adds hook-driven agent routing with a `routing` block (`allowed_agents`, `default_agent`) and new `before_agent_run`/`after_agent_complete` hook events
+- Adds native JSON field selection (`transform_json`) as a builtin hook for trimming tool response payloads
+- Adds a `debug tool` command (`docker agent debug tool <config> <tool> [JSON params]`) to call tools directly outside of any LLM loop
+- Adds `--last` flag to `docker agent run --exec` to print only the final answer, buffering intermediate output
+- Adds `max_output_bytes` field to the `openapi` toolset to cap response text size (omitting it keeps the 30,000-byte default; `0` disables the cutoff)
+- Adds `SessionRecovered` event for idle recovery boundaries in the runtime
+- Exposes codemode tool calls and highlights scripts in TUIs, emitting standard tool-call, streamed-output, and response events for tools invoked inside Code Mode
+- Returns promises from codemode tool calls, supporting concurrent execution, `Promise.all`, `Promise.allSettled`, and top-level await
+- Supports `DOCKER_AGENT_DATA_DIR` environment variable for setting the data directory
+- Adds repeat stability and cost outlier reporting to eval runs with `--repeat > 1`
+- Adds `--flavor` support and structured tool output capture to `docker agent eval`
+
+## Improvements
+
+- Lean TUI unmatched slash queries now fall back to model selection instead of dismissing the menu, supporting multi-term queries like `/openai astra`
+- Prompt history now follows `--data-dir` (including `~` expansion) and forwards the setting to the sandbox
+- Eval judge model default updated to `openai/gpt-5.6-terra`
+
+## Bug Fixes
+
+- Fixes DMR commands routing through the selected Docker connection (context/host/config/TLS) instead of falling back to a hardcoded local socket
+- Fixes DMR transport errors to include the name of the selected Docker connection (`--host`, `--context`, etc.)
+- Fixes assistant messages being dropped across TUIs, remote sessions, and recovery
+- Fixes tool-call XML leaking into canonical and reloaded assistant text
+- Fixes generated media losing stable identity on redraw in the TUI
+- Fixes remote session history loss across idle recovery, OAuth elicitation, and snapshots taken mid-turn
+- Fixes lean TUI tool updates duplicating content in terminal scrollback
+- Fixes lean TUI replaying the full offscreen suffix on every redraw
+- Fixes tool argument declaration order not being preserved in generated schemas
+- Fixes reasoning and response output running together in exec text mode — a blank line is now inserted between them
+- Fixes eval containers picking up a stale local agent image digest instead of the most recently built one
+- Fixes `--data-dir` not expanding `~` and not forwarding the path to the sandbox
+- Clarifies `/speak` transcription requirements: requires `OPENAI_API_KEY` and does not work with the Docker models gateway
+
+## Technical Changes
+
+- Removes flaky `TestTmuxVisibilityLifecycle` tmux integration test
+### Pull Requests
+
+- [#4481](https://github.com/docker/docker-agent/pull/4481) - fix: route DMR through the selected Docker connection safely
+- [#4482](https://github.com/docker/docker-agent/pull/4482) - chore: refresh models.dev snapshot (+38 -14 ~95)
+- [#4483](https://github.com/docker/docker-agent/pull/4483) - chore: refresh models.dev snapshot (+30 -14 ~39)
+- [#4484](https://github.com/docker/docker-agent/pull/4484) - feat: add settings command to lean TUI
+- [#4487](https://github.com/docker/docker-agent/pull/4487) - feat: return promises from codemode tool calls
+- [#4488](https://github.com/docker/docker-agent/pull/4488) - test(tui): remove flaky tmux visibility lifecycle test
+- [#4489](https://github.com/docker/docker-agent/pull/4489) - docs: auto-update for merged PRs (2026-10-01)
+- [#4490](https://github.com/docker/docker-agent/pull/4490) - feat(openapi): add max_output_bytes to cap response text size
+- [#4491](https://github.com/docker/docker-agent/pull/4491) - fix: name selected Docker connection in DMR transport errors
+- [#4492](https://github.com/docker/docker-agent/pull/4492) - feat: add debug tool command to call tools directly
+- [#4493](https://github.com/docker/docker-agent/pull/4493) - fix: stop dropping assistant turns across TUIs, remote sessions and recovery
+- [#4494](https://github.com/docker/docker-agent/pull/4494) - feat: expose codemode tool calls and highlight scripts in TUIs
+- [#4495](https://github.com/docker/docker-agent/pull/4495) - feat: add hook-driven agent routing
+- [#4496](https://github.com/docker/docker-agent/pull/4496) - feat: honor --data-dir for prompt history and sandbox forwarding
+- [#4498](https://github.com/docker/docker-agent/pull/4498) - fix: clarify speech input requirements
+- [#4499](https://github.com/docker/docker-agent/pull/4499) - feat(eval): forward --flavor overrides and record structured tool output
+- [#4500](https://github.com/docker/docker-agent/pull/4500) - feat(eval): report repeat stability and cost outliers
+- [#4501](https://github.com/docker/docker-agent/pull/4501) - fix: prevent lean TUI tool updates from duplicating scrollback
+- [#4502](https://github.com/docker/docker-agent/pull/4502) - docs: auto-update for merged PRs (2026-10-03)
+- [#4504](https://github.com/docker/docker-agent/pull/4504) - feat: add --last flag for exec to print only the final answer
+- [#4505](https://github.com/docker/docker-agent/pull/4505) - feat(hooks): add transform_json builtin for field selection
+- [#4506](https://github.com/docker/docker-agent/pull/4506) - fix(eval): pin local agent image digest when building containers
+- [#4507](https://github.com/docker/docker-agent/pull/4507) - fix(leantui): switch unmatched slash queries to model selection
+- [#4508](https://github.com/docker/docker-agent/pull/4508) - fix: preserve tool argument declaration order
+- [#4509](https://github.com/docker/docker-agent/pull/4509) - docs: auto-update for merged PRs (2026-10-05)
+- [#4511](https://github.com/docker/docker-agent/pull/4511) - chore: refresh models.dev snapshot (+132 -38 ~155)
+- [#4513](https://github.com/docker/docker-agent/pull/4513) - fix(cli): separate reasoning from response in exec text mode
+- [#4514](https://github.com/docker/docker-agent/pull/4514) - eval: default judge model to openai/gpt-5.6-terra
+
+
 ## [v1.145.0] - 2026-09-28
 
 This release adds ACP request trace propagation, new lint cops for code quality, and a fix for lean TUI scrollback preservation during partial tool calls.
@@ -6718,3 +6794,5 @@ This release improves the terminal user interface with better error handling and
 [v1.144.0]: https://github.com/docker/docker-agent/releases/tag/v1.144.0
 
 [v1.145.0]: https://github.com/docker/docker-agent/releases/tag/v1.145.0
+
+[v1.147.0]: https://github.com/docker/docker-agent/releases/tag/v1.147.0

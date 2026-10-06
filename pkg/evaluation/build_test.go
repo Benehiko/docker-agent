@@ -18,6 +18,16 @@ func TestBuildEvalImagePinsLocalAgentDigest(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake runtime is a POSIX shell script")
 	}
+	// Write before parallel tests can fork and inherit a writer to the executable,
+	// which would make exec fail with ETXTBSY. Subtests only symlink this script.
+	sharedRuntime := filepath.Join(t.TempDir(), "runtime")
+	require.NoError(t, os.WriteFile(sharedRuntime, []byte(
+		"#!/bin/sh\nd=${0%/*}\n"+
+			"if [ \"$1\" = image ]; then\n"+
+			" printf '%s\\n' \"$@\" > \"$d/inspect-args\"\n"+
+			" if [ -f \"$d/inspect-fail\" ]; then exit 1; fi\n"+
+			" cat \"$d/inspect-output\"\n"+
+			"else\n cat > \"$d/Dockerfile\"\n printf '%s\\n' sha256:eval-image\nfi\n"), 0o755))
 	t.Parallel()
 
 	digest := "sha256:" + strings.Repeat("a", 64)
@@ -44,15 +54,11 @@ func TestBuildEvalImagePinsLocalAgentDigest(t *testing.T) {
 			argsFile := filepath.Join(dir, "inspect-args")
 			dockerfile := filepath.Join(dir, "Dockerfile")
 			fakeRuntime := filepath.Join(dir, "runtime")
-			script := "#!/bin/sh\nif [ \"$1\" = image ]; then\n" +
-				" printf '%s\\n' \"$@\" > '" + argsFile + "'\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "inspect-output"), []byte(tc.inspect+"\n"), 0o644))
 			if tc.failedInspect {
-				script += " exit 1\n"
-			} else {
-				script += " printf '%s\\n' '" + tc.inspect + "'\n"
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "inspect-fail"), nil, 0o644))
 			}
-			script += "else\n cat > '" + dockerfile + "'\n printf '%s\\n' sha256:eval-image\nfi\n"
-			require.NoError(t, os.WriteFile(fakeRuntime, []byte(script), 0o755))
+			require.NoError(t, os.Symlink(sharedRuntime, fakeRuntime))
 			runner := newRunner(config.NewFileSource(filepath.Join(dir, "agent.yaml")), nil,
 				Config{EvalsDir: dir, ContainerRuntime: fakeRuntime, AgentImage: tc.image})
 			image, err := runner.buildEvalImage(t.Context(), &session.EvalCriteria{})

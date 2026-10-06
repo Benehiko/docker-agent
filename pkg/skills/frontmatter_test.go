@@ -33,3 +33,16 @@ func TestSplitKeyValue(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFrontmatterMalformed(t *testing.T) {
+	t.Parallel()
+	for _, content := range []string{"", "---", "---\n---garbage", "---\nname: test\n---garbage"} {
+		t.Run(content, func(t *testing.T) {
+			t.Parallel()
+			_, ok := parseFrontmatter(content)
+			assert.False(t, ok)
+		})
+	}
+	_, ok := parseFrontmatter("---\n---")
+	assert.True(t, ok)
+}

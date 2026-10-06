@@ -2,11 +2,14 @@ package skills
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/paths"
 )
 
@@ -65,7 +68,7 @@ func (s Skill) ExpandsCommands() bool {
 
 // Load discovers and loads skills from the given sources.
 // Each source is either "local" (for filesystem-based skills) or an HTTP/HTTPS
-// URL (for remote skills per the well-known skills discovery spec).
+// URL (a public GitHub repository or a well-known skills discovery endpoint).
 //
 // Local skills are loaded from (in order, later overrides earlier):
 //
@@ -83,7 +86,18 @@ func (s Skill) ExpandsCommands() bool {
 //
 // The returned slice is sorted by skill name for deterministic ordering.
 func Load(ctx context.Context, sources []string) []Skill {
+	loaded, warnings := LoadWithWarnings(ctx, sources, environment.NewOsEnvProvider())
+	for _, warning := range warnings {
+		slog.WarnContext(ctx, warning)
+	}
+	return loaded
+}
+
+// LoadWithWarnings loads skills and reports GitHub source failures to the caller.
+// The environment provider supplies the optional GITHUB_TOKEN credential.
+func LoadWithWarnings(ctx context.Context, sources []string, env environment.Provider) ([]Skill, []string) {
 	skillMap := make(map[string]Skill)
+	var warnings []string
 
 	var remoteCache *diskCache
 	for _, source := range sources {
@@ -94,7 +108,22 @@ func Load(ctx context.Context, sources []string) []Skill {
 			if remoteCache == nil {
 				remoteCache = newDiskCache(filepath.Join(paths.GetCacheDir(), "skills"))
 			}
-			for _, skill := range loadRemoteSkills(ctx, source, remoteCache) {
+			github, recognized, err := parseGitHubSource(source)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("GitHub skill source %s: %v", source, err))
+				continue
+			}
+			var loaded []Skill
+			if recognized {
+				loaded, err = loadGitHubSkills(ctx, github, remoteCache, env)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("GitHub skill source %s: %v", source, err))
+					continue
+				}
+			} else {
+				loaded = loadRemoteSkills(ctx, source, remoteCache)
+			}
+			for _, skill := range loaded {
 				skillMap[source+"/"+skill.Name] = skill
 			}
 		}
@@ -108,7 +137,7 @@ func Load(ctx context.Context, sources []string) []Skill {
 		// deterministic ordering even when a local and a remote source
 		// expose a skill with the same name.
 		return strings.Compare(a.FilePath, b.FilePath)
-	})
+	}), warnings
 }
 
 // isHTTPSource reports whether s is an HTTP(S) URL source.

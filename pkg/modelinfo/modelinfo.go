@@ -704,9 +704,9 @@ func warnCapsLookupMiss(ctx context.Context, id modelsdev.ID, cause error) {
 // model ID using the provided store.
 //
 // When the store is nil or the model is not found, LoadCaps returns a
-// conservative capability set that only allows text MIME types. A models.dev
-// miss is logged once per model via [warnCapsLookupMiss] so the degraded
-// behaviour is diagnosable rather than silent.
+// conservative capability set that only allows text MIME types. On a direct
+// catalogue miss, [AliasedCatalogCaps] may supply scoped input capabilities.
+// An unresolved models.dev miss is logged once per model via [warnCapsLookupMiss].
 //
 // The supplied ctx is wrapped with loadCapsTimeout so the lookup stays
 // cancellable with the caller and the underlying models.dev load is bounded.
@@ -722,6 +722,9 @@ func LoadCaps(ctx context.Context, store *modelsdev.Store, id modelsdev.ID) Mode
 
 	model, err := store.GetModel(ctx, id)
 	if err != nil {
+		if caps, ok := AliasedCatalogCaps(ctx, store, id); ok {
+			return caps
+		}
 		if ctx.Err() != nil {
 			slog.WarnContext(ctx, "modelinfo: models.dev lookup timed out, using conservative caps",
 				"model", id.String(), "timeout", loadCapsTimeout)

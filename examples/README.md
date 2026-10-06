@@ -210,6 +210,7 @@ remote MCP endpoints.
 | [`cloudflare-workers-ai.yaml`](cloudflare-workers-ai.yaml) | Cloudflare Workers AI edge-hosted open models. |
 | [`cloudflare-ai-gateway.yaml`](cloudflare-ai-gateway.yaml) | Cloudflare AI Gateway multi-provider router. |
 | [`grok.yaml`](grok.yaml) | xAI Grok model. |
+| [`chatgpt-images.yaml`](chatgpt-images.yaml) + [`chatgpt-images.png`](chatgpt-images.png) | ChatGPT image input with an attached sample image and automatic capability detection. |
 | [`github-copilot.yaml`](github-copilot.yaml) | GitHub Copilot models via OAuth device-flow. |
 | [`fallback_models.yaml`](fallback_models.yaml) | Automatic fallback to a secondary model when the primary fails. |
 | [`model_picker.yaml`](model_picker.yaml) | Lets the agent itself swap to a stronger model mid-conversation. |

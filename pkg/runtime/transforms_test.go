@@ -1161,3 +1161,78 @@ func (p *queueRecordingProvider) CreateChatCompletionStream(ctx context.Context,
 	p.calls++
 	return p.recordingMsgProvider.CreateChatCompletionStream(ctx, msgs, tls)
 }
+
+func TestPrepareMessagesForModel_ChatGPTImageFallback(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		model     string
+		direct    []string
+		override  *latest.CapabilitiesConfig
+		wantImage bool
+	}{
+		{name: "OpenAI image input", model: "gpt-6.1-sol", wantImage: true},
+		{name: "unknown stays text only", model: "unknown"},
+		{name: "direct entry wins", model: "gpt-6.1-sol", direct: []string{"text"}},
+		{name: "explicit false wins", model: "gpt-6.1-sol", override: &latest.CapabilitiesConfig{}},
+		{name: "explicit true wins", model: "unknown", override: &latest.CapabilitiesConfig{Image: true}, wantImage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prov := &recordingMsgProvider{
+				mockProvider: mockProvider{id: "chatgpt/" + tc.model},
+				baseConfig: base.Config{ModelConfig: latest.ModelConfig{
+					Provider: "chatgpt", Model: tc.model, Capabilities: tc.override,
+				}},
+			}
+			a := agent.New("root", "instructions", agent.WithModel(prov))
+			providers := map[string]modelsdev.Provider{
+				"openai": {Models: map[string]modelsdev.Model{
+					"gpt-6.1-sol": {Modalities: modelsdev.Modalities{Input: []string{"text", "image", "pdf", "audio", "video"}}},
+				}},
+			}
+			if tc.direct != nil {
+				providers["chatgpt"] = modelsdev.Provider{Models: map[string]modelsdev.Model{
+					tc.model: {Modalities: modelsdev.Modalities{Input: tc.direct}},
+				}}
+			}
+			store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: providers})
+			r, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(a)), WithModelStore(store))
+			require.NoError(t, err)
+
+			image := chat.MessagePart{Type: chat.MessagePartTypeDocument, Document: &chat.Document{
+				Name: "screenshot.png", MimeType: "image/png", Source: chat.DocumentSource{InlineData: []byte{1, 2, 3}},
+			}}
+			user := mixedMediaMsg()
+			user.MultiContent = append(user.MultiContent, image)
+			tool := chat.Message{Role: chat.MessageRoleTool, ToolCallID: "call_1", MultiContent: []chat.MessagePart{
+				{Type: chat.MessagePartTypeText, Text: "screenshot"},
+				image,
+				{Type: chat.MessagePartTypeImageURL, ImageURL: &chat.MessageImageURL{URL: "data:image/png;base64,AQID"}},
+			}}
+			got := r.prepareMessagesForModel(t.Context(), session.New(), a, prov, []chat.Message{user, tool})
+			require.Len(t, got, 2)
+			for _, msg := range got {
+				var images int
+				for _, part := range msg.MultiContent {
+					if part.Type == chat.MessagePartTypeImageURL {
+						images++
+					}
+					if part.Document != nil {
+						assert.NotContains(t, []string{"audio/wav", "video/mp4"}, part.Document.MimeType)
+						if part.Document.MimeType == "image/png" {
+							assert.Equal(t, image.Document, part.Document)
+							images++
+						}
+					}
+				}
+				if tc.wantImage {
+					assert.Equal(t, 2, images, "role %s", msg.Role)
+				} else {
+					assert.Zero(t, images, "role %s", msg.Role)
+				}
+			}
+		})
+	}
+}

@@ -74,3 +74,19 @@ func TestCapabilityOverride_SurvivesProviderConstruction(t *testing.T) {
 		assert.Equal(t, &modelinfo.CapsOverride{Image: true, PDF: true, Audio: true, Video: true}, got)
 	})
 }
+
+func TestCapabilityOverride_ChatGPT(t *testing.T) {
+	t.Parallel()
+
+	env := environment.NewMapEnvProvider(map[string]string{"CHATGPT_OAUTH_TOKEN": "test-token"})
+	for _, image := range []bool{false, true} {
+		cfg := &latest.ModelConfig{
+			Provider: "chatgpt", Model: "gpt-6.1-sol",
+			Capabilities: &latest.CapabilitiesConfig{Image: image},
+		}
+		p, err := fullTestRegistry().New(t.Context(), cfg, env)
+		require.NoError(t, err)
+		bc := p.BaseConfig()
+		assert.Equal(t, &modelinfo.CapsOverride{Image: image}, bc.CapsOverride())
+	}
+}

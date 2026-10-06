@@ -99,7 +99,11 @@ func (r *LocalRuntime) prepareMessagesForModel(
 	cfg := model.BaseConfig()
 	caps := modelinfo.ResolveCapsFromModel(catalogModel, cfg.CapsOverride())
 	if catalogModel == nil && cfg.CapsOverride() == nil {
-		caps = providerFallbackCaps(ctx, cfg.ModelConfig, modelID)
+		if aliased, ok := modelinfo.AliasedCatalogCaps(ctx, r.modelsStore, modelID); ok {
+			caps = aliased
+		} else {
+			caps = providerFallbackCaps(ctx, cfg.ModelConfig, modelID)
+		}
 	}
 	return r.applyBeforeLLMCallTransforms(ctx, sess, a, modelID.String(), &caps, msgs)
 }

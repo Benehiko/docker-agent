@@ -90,7 +90,9 @@ For custom OpenAI-compatible providers, local models (Ollama, DMR), and any
 model the built-in catalogue does not describe, Docker Agent cannot
 auto-detect whether the endpoint accepts image, PDF, audio, or video
 attachments. When the model is absent from the catalogue, Docker Agent logs a
-diagnostic and falls back to text-only, silently dropping attachments.
+diagnostic and falls back to text-only, silently dropping attachments. For the
+`chatgpt` provider, a missing entry first falls back to the matching `openai`
+entry for **image input only**; PDF, audio, and video are not inferred.
 
 Declare `capabilities` to make the model's attachment support authoritative
 and skip the catalogue lookup entirely:
@@ -130,8 +132,8 @@ models:
 
 The flags must match what the endpoint actually accepts. Claiming a modality
 that the endpoint does not support leads to a provider-side API error. When
-`capabilities` is omitted the behaviour is unchanged (catalogue lookup then
-conservative text-only fallback).
+`capabilities` is omitted, input support comes from the catalogue, the scoped
+ChatGPT image fallback above, or conservative text-only fallback.
 
 ### Unsupported media is stripped before the call
 

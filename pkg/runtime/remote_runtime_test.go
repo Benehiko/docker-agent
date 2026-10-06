@@ -194,8 +194,7 @@ func TestRemoteRuntime_BackgroundEventsSurviveTurnsWithoutReplayingHistory(t *te
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL)
 	rt, err := NewRemoteRuntime(client)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rt.Close()) })
@@ -265,8 +264,7 @@ func TestRemoteRuntime_BackgroundSubscriptionWaitsForEventLogAndDeliversElicitat
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL)
 	rt, err := NewRemoteRuntime(client)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rt.Close()) })
@@ -345,8 +343,7 @@ func TestRemoteRuntime_BackgroundGapReconcilesSavedTextWithoutReplay(t *testing.
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL)
 	rt, err := NewRemoteRuntime(client)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rt.Close()) })
@@ -474,8 +471,7 @@ func TestRemoteRuntime_BackgroundGapWaitsForIdleAndCloseCancelsRecovery(t *testi
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL)
 	rt, err := NewRemoteRuntime(client)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rt.Close()) })

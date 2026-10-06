@@ -291,8 +291,7 @@ func TestEvaluatorUsagePersistenceAndSSE(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
 	}))
 	t.Cleanup(server.Close)
-	client, err := NewClient(server.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, server.URL)
 	stream, err := client.StreamSessionEvents(t.Context(), sess.ID)
 	require.NoError(t, err)
 	var received []*EvaluationUsageEvent

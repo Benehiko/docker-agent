@@ -13,6 +13,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// httptest.Server.Close closes the global pool, so parallel tests need private transports.
+func newTestTransport(t *testing.T) *http.Transport {
+	t.Helper()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(transport.CloseIdleConnections)
+	return transport
+}
+
+func newTestClient(t *testing.T, baseURL string, opts ...ClientOption) *Client {
+	t.Helper()
+	opts = append([]ClientOption{WithHTTPClient(&http.Client{
+		Transport: newTestTransport(t),
+		Timeout:   30 * time.Second,
+	})}, opts...)
+	client, err := NewClient(baseURL, opts...)
+	require.NoError(t, err)
+	return client
+}
+
+func TestNewTestClientUsesPrivateTransport(t *testing.T) {
+	t.Parallel()
+
+	client := newTestClient(t, "http://127.0.0.1:1")
+	require.NotNil(t, client.httpClient.Transport)
+	assert.NotSame(t, http.DefaultTransport, client.httpClient.Transport)
+	assert.NotSame(t, client.httpClient.Transport, newTestClient(t, "http://127.0.0.1:1").httpClient.Transport)
+	assert.Equal(t, 30*time.Second, client.httpClient.Timeout)
+
+	timed := newTestClient(t, "http://127.0.0.1:1", WithTimeout(100*time.Millisecond))
+	assert.Equal(t, 100*time.Millisecond, timed.httpClient.Timeout)
+	assert.NotSame(t, http.DefaultTransport, timed.httpClient.Transport)
+
+	streaming := timed.streamingHTTPClient()
+	assert.Zero(t, streaming.Timeout)
+	assert.Same(t, timed.httpClient.Transport, streaming.Transport)
+}
+
 // TestClient_StreamSessionEvents_DeliversMultipleEvents verifies that the
 // SSE stream stays open across multiple events instead of being torn down
 // when StreamSessionEvents returns. This is a regression test for a bug
@@ -50,8 +87,7 @@ func TestClient_StreamSessionEvents_DeliversMultipleEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(proceed) })
 
-	c, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL)
 
 	ch, err := c.StreamSessionEvents(t.Context(), "s")
 	require.NoError(t, err)
@@ -96,8 +132,7 @@ func TestClient_StreamSessionEvents_StopsWhenContextCancelled(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -143,8 +178,7 @@ func TestClient_RunAgentIgnoresTotalHTTPTimeout(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c, err := NewClient(srv.URL, WithHTTPClient(&http.Client{Timeout: 100 * time.Millisecond}))
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL, WithHTTPClient(&http.Client{Timeout: 100 * time.Millisecond, Transport: newTestTransport(t)}))
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	stream, err := c.RunAgent(ctx, "s", "agent.yaml", nil, "")
@@ -188,8 +222,7 @@ func TestClient_StreamSessionEventsReconnectsFromLastDeliveredID(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c, err := NewClient(srv.URL, WithAuthToken("secret"))
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL, WithAuthToken("secret"))
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	stream, err := c.StreamSessionEvents(ctx, "s")
@@ -216,8 +249,7 @@ func TestClient_StreamSessionEventsGapRequiresSnapshot(t *testing.T) {
 		fmt.Fprint(w, "data: {\"type\":\"gap\"}\n\nid: 99\ndata: {\"type\":\"session_title\",\"title\":\"partial history\"}\n\n")
 	}))
 	t.Cleanup(srv.Close)
-	c, err := NewClient(srv.URL + "?since=1")
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL+"?since=1")
 	stream, err := c.StreamSessionEventsSince(t.Context(), "s", 7)
 	require.NoError(t, err)
 	var got []Event
@@ -245,11 +277,11 @@ func TestClient_SSECancelWithUnreadFullBuffer(t *testing.T) {
 				<-r.Context().Done()
 			}))
 			t.Cleanup(srv.Close)
-			c, err := NewClient(srv.URL)
-			require.NoError(t, err)
+			c := newTestClient(t, srv.URL)
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			var stream <-chan Event
+			var err error
 			if run {
 				stream, err = c.RunAgent(ctx, "s", "agent.yaml", nil, "")
 			} else {
@@ -287,8 +319,7 @@ func TestClient_StreamSessionEventsReconnectsAfterEmptyConnection(t *testing.T) 
 		fmt.Fprint(w, "id: 1\ndata: {\"type\":\"session_title\",\"title\":\"recovered\"}\n\nid: 2\ndata: {\"type\":\"session_exited\"}\n\n")
 	}))
 	t.Cleanup(srv.Close)
-	c, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	stream, err := c.StreamSessionEvents(ctx, "s")
@@ -316,8 +347,7 @@ func TestClient_StreamSessionEventsIgnoresTotalHTTPTimeout(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL, WithTimeout(100*time.Millisecond))
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL, WithTimeout(100*time.Millisecond))
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	stream, err := client.StreamSessionEvents(ctx, "s")
@@ -356,8 +386,7 @@ func TestClient_RunAgentIncompleteStreamIsAnError(t *testing.T) {
 				}
 			}))
 			t.Cleanup(srv.Close)
-			client, err := NewClient(srv.URL)
-			require.NoError(t, err)
+			client := newTestClient(t, srv.URL)
 			stream, err := client.RunAgent(t.Context(), "s", "agent.yaml", nil, "")
 			require.NoError(t, err)
 			var got []Event

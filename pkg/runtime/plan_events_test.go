@@ -52,8 +52,7 @@ func TestClient_DecodesPlanChangedEvent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	c := newTestClient(t, srv.URL)
 
 	ch, err := c.StreamSessionEvents(t.Context(), "s")
 	require.NoError(t, err)

@@ -27,8 +27,7 @@ func TestSessionRecoveredEventContract(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(srv.URL)
-	require.NoError(t, err)
+	client := newTestClient(t, srv.URL)
 	events, err := client.StreamSessionEvents(t.Context(), "root")
 	require.NoError(t, err)
 	var got []Event

@@ -914,7 +914,8 @@ type InlineSkill struct {
 // inline definitions enables skills without loading local or remote ones.
 //
 // The special source "local" loads skills from the filesystem (standard locations).
-// HTTP/HTTPS URLs load skills from remote servers per the well-known skills discovery spec.
+// HTTPS GitHub repository URLs discover skills from commit snapshots. Other
+// HTTP/HTTPS URLs use the well-known skills discovery spec.
 type SkillsConfig struct {
 	// Sources lists where to load skills from: "local" and/or HTTP/HTTPS URLs.
 	Sources []string

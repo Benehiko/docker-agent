@@ -62,6 +62,80 @@ agents:
 
 A name that doesn't match any discovered skill is logged as a warning at startup but is otherwise ignored.
 
+## GitHub Skill Sources
+
+Load skills directly from a public GitHub repository, without installing Git or
+an external skills CLI:
+
+```yaml
+agents:
+  root:
+    model: openai/gpt-4o-mini
+    skills:
+      - local
+      - https://github.com/docker/skills
+    toolsets:
+      - type: filesystem
+      - type: shell
+```
+
+Repository URLs use the default branch. To select a branch, tag, commit SHA, or
+subdirectory, use a GitHub tree URL or query parameters:
+
+```yaml
+skills:
+  - https://github.com/docker/skills/tree/main/skills
+  # Alternative examples (use one source, not all of them):
+  # - https://github.com/docker/skills?ref=v0.3.0
+  # - https://github.com/docker/skills?ref=<full-40-character-commit-sha>
+  # - https://github.com/owner/repo?ref=feature%2Fskills&path=skills
+```
+
+A tree URL treats the first segment after `/tree/` as the revision and the rest
+as a directory. Use `?ref=...&path=...` for branch or tag names containing `/`, or
+URL-escape the slash as `%2F`. Short commit hashes are resolved through the API;
+use a full 40-character SHA for an immutable pin.
+
+Without a selected directory, discovery checks `skills/**/SKILL.md`, then
+`.agents/skills/**/SKILL.md`, then a root `SKILL.md`, using the first layout
+containing skills. An explicit directory is searched recursively without
+fallback. Complete skill directories, including supporting files, are cached.
+
+### Authentication and caching
+
+Only **public repositories on github.com** are supported. The optional
+`GITHUB_TOKEN` comes from the configured environment provider, including OS
+environment variables, env files, and secrets. It raises GitHub API rate limits;
+it is not required or prompted for, and does not enable private repositories.
+The token is sent only to `api.github.com`, never to the archive host.
+
+Default branches, named branches, and tags are resolved to a commit SHA and
+cached for **five minutes**. Downloaded snapshots are immutable and cached by
+repository, SHA, and directory. A warm load makes no network requests; after
+five minutes mutable revisions are checked again. A full-SHA source needs no
+further network requests once cached. All files come from the same commit.
+
+Archives are fetched from `codeload.github.com`. Downloads are bounded to 32 MiB
+compressed, 128 MiB expanded, and 4,096 selected files, with a 1 MiB limit per
+skill file and 32 MiB total selected content. Failed downloads never publish a
+partial snapshot; source failures appear as load-time warnings. Expired mutable
+revisions are not silently reused on network errors.
+
+### Trust and sandbox behavior
+
+Cached GitHub skills remain **remote**: embedded `` !`command` `` expressions are
+not expanded. Remote frontmatter `model` and `toolsets` overrides are ignored.
+Fork skills inherit the parent's model and tools, with `allowed-tools` able to
+restrict inherited tools. Symlinks and other non-regular entries inside selected
+skill directories are rejected; Git submodules are not fetched.
+
+In sandbox mode, GitHub sources are fetched inside the VM rather than staged as
+local skills. Permit network access to `api.github.com` and `codeload.github.com`
+and make any optional token available through the sandbox's environment provider.
+
+See [`examples/skills_github.yaml`](https://github.com/docker/docker-agent/blob/main/examples/skills_github.yaml)
+for a complete configuration.
+
 ## Inline Skills
 
 Instead of (or alongside) loading skills from files and URLs, you can define skills directly in the agent config. An inline skill is a mapping item in the `skills` list, freely mixed with the string items above:

@@ -160,6 +160,7 @@ type RunOutputConfig struct {
 	Agent       string   `json:"agent"`
 	Flavors     []string `json:"flavors,omitempty"`
 	JudgeModel  string   `json:"judge_model,omitempty"`
+	JudgeType   string   `json:"judge_type,omitempty"`
 	Concurrency int      `json:"concurrency"`
 	EvalsDir    string   `json:"evals_dir"`
 	BaseImage   string   `json:"base_image,omitempty"`
@@ -176,7 +177,8 @@ type Config struct {
 	AgentFilename    string   // Path to the agent configuration file
 	Flavors          []string // Selected config patches, in application order
 	EvalsDir         string   // Directory containing evaluation files
-	JudgeModel       string   // Model for relevance checking (format: provider/model, optional)
+	JudgeModel       string   // provider/model reference or named evaluator for relevance checking
+	JudgeType        string   // llm (default) or evaluator
 	Concurrency      int      // Number of concurrent runs (0 = number of CPUs)
 	TTYFd            int      // File descriptor for terminal size queries (e.g., int(os.Stdout.Fd()))
 	Only             []string // Only run evaluations matching these patterns

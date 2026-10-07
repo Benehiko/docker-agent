@@ -371,6 +371,11 @@ func cloneEvalResultChecks(src EvalResultChecks) EvalResultChecks {
 	if src.Relevance != nil {
 		relevance := *src.Relevance
 		relevance.Results = slices.Clone(src.Relevance.Results)
+		for i := range relevance.Results {
+			if p := relevance.Results[i].Probability; p != nil {
+				relevance.Results[i].Probability = new(*p)
+			}
+		}
 		cp.Relevance = &relevance
 	}
 	if src.Assertions != nil {

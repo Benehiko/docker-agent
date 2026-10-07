@@ -27,8 +27,6 @@ import (
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/config/sources"
 	"github.com/docker/docker-agent/pkg/environment"
-	"github.com/docker/docker-agent/pkg/model/provider"
-	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/session"
 )
 
@@ -37,6 +35,7 @@ type Runner struct {
 	Config
 
 	agentSource config.Source
+	agentConfig *latest.Config
 	judge       *Judge
 	runConfig   *config.RuntimeConfig
 
@@ -66,11 +65,13 @@ func Evaluate(ctx context.Context, ttyOut, out io.Writer, isTTY bool, runName st
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent: %w", err)
 	}
-	if _, err := config.Load(ctx, agentSource, config.WithFlavors(runConfig.Flavors...)); err != nil {
+	agentConfig, err := config.Load(ctx, agentSource, config.WithFlavors(runConfig.Flavors...))
+	if err != nil {
 		return nil, fmt.Errorf("loading agent: %w", err)
 	}
 
 	runner := newRunner(agentSource, runConfig, cfg)
+	runner.agentConfig = agentConfig
 
 	fmt.Fprintf(out, "Evaluation run: %s\n", runName)
 
@@ -121,14 +122,14 @@ func (r *Runner) Run(ctx context.Context, ttyOut, out io.Writer, isTTY bool) ([]
 	// instead of silently producing zero-relevance results.
 	if needsJudge(evals) {
 		if r.judge == nil {
-			judgeModel, err := createJudgeModel(ctx, r.JudgeModel, r.runConfig)
+			judge, err := createJudge(ctx, r.Config, r.runConfig, r.agentConfig)
 			if err != nil {
 				return nil, err
 			}
-			if judgeModel == nil {
+			if judge == nil {
 				return nil, errors.New("some evaluations have relevance criteria but no judge model is configured (use --judge-model)")
 			}
-			r.judge = NewJudge(judgeModel, r.Concurrency)
+			r.judge = judge
 		}
 		fmt.Fprintln(out, "Validating judge model...")
 		if err := r.judge.Validate(ctx); err != nil {
@@ -423,6 +424,15 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 		"-v", agentDir+":/configs:ro",
 	)
 
+	judgeConfigDir, err := r.stageJudgeProvider()
+	if err != nil {
+		return nil, err
+	}
+	if judgeConfigDir != "" {
+		defer os.RemoveAll(judgeConfigDir)
+		args = append(args, "-v", judgeConfigDir+":/judge-config:ro")
+	}
+
 	var env []string
 	// addEnv forwards a variable to the container: "-e NAME" tells the runtime
 	// CLI to pass it through, and NAME=VALUE sets it on the CLI process.
@@ -478,6 +488,9 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 	if setup != "" {
 		// Run setup script, then docker agent run --exec with the original arguments.
 		args = append(args, "sh", "-c", "sh /setup.sh && exec /docker-agent run --exec --yolo --json \"$@\"", "--")
+	}
+	if judgeConfigDir != "" {
+		args = append(args, "--config-dir", "/judge-config")
 	}
 	for _, flavor := range r.runConfig.Flavors {
 		args = append(args, "--flavor", flavor)
@@ -694,31 +707,4 @@ func needsJudge(evals []InputSession) bool {
 	return slices.ContainsFunc(evals, func(s InputSession) bool {
 		return s.Evals != nil && len(s.Evals.Relevance) > 0
 	})
-}
-
-// createJudgeModel creates a provider.Provider from a model string (format: provider/model).
-// Returns nil if judgeModel is empty.
-func createJudgeModel(ctx context.Context, judgeModel string, runConfig *config.RuntimeConfig) (provider.Provider, error) {
-	if judgeModel == "" {
-		return nil, nil
-	}
-
-	cfg, err := latest.ParseModelRef(judgeModel)
-	if err != nil {
-		return nil, fmt.Errorf("invalid judge model format %q: expected 'provider/model'", judgeModel)
-	}
-
-	opts := []options.Opt{
-		options.WithStructuredOutput(judgeResponseSchema),
-	}
-	if runConfig.ModelsGateway != "" {
-		opts = append(opts, options.WithGateway(runConfig.ModelsGateway))
-	}
-
-	judge, err := runConfig.ProviderRegistryOrDefault().New(ctx, &cfg, runConfig.EnvProvider(), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("creating judge model: %w", err)
-	}
-
-	return judge, nil
 }

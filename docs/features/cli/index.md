@@ -548,7 +548,8 @@ $ docker agent eval <agent-file>|<registry-ref> [<eval-dir>|./evals] [flags]
 | Flag                | Default                              | Description                                                                |
 | ------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
 | `-c, --concurrency` | num CPUs                             | Number of concurrent evaluation runs                                       |
-| `--judge-model`     | `openai/gpt-5.6-terra` | Model for LLM-as-a-judge relevance scoring (format: `provider/model`)      |
+| `--judge-model`     | Depends on `--judge-type` | Judge model (`provider/model`) or named evaluator; defaults to `openai/gpt-5.6-terra` for `llm`, `typesafe/jev-latest` for `evaluator`      |
+| `--judge-type`      | `llm` | Judge backend: `llm` or `evaluator` |
 | `--output <dir>`    | `<eval-dir>/results`                 | Directory for results, logs, and session databases                         |
 | `--only <pattern>`  | (all)                                | Only run evals with file names matching these patterns (repeatable)        |
 | `--base-image`      | (default)                            | Custom base image for eval containers                                      |

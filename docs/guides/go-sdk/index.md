@@ -93,6 +93,19 @@ These entry points exclude the application, CLI, MCP toolset implementation, and
 JavaScript engine. Runtime event types still retain MCP protocol support and the
 runtime's own builtin tools; this is not a runtime or remote-session refactor.
 
+## Explicit Loader Defaults
+
+`pkg/teamloader/defaults.LoaderOpts()` supplies the full provider, toolset and
+source registries without registering runtime factories. Enable optional
+execution features on each runtime with
+`runtime.WithHarnessFactory(codingharness.Factory)` and
+`runtime.WithCommandEvaluatorFactory(jscommands.Factory)`.
+
+The existing `loaderdefaults.Opts()` remains a compatibility helper: it returns
+those loader options and also registers the harness and JavaScript factories
+globally. Both helpers link the full defaults; dependency-light embedders should
+continue supplying their own registries.
+
 ## Headless Embedded Chat (`pkg/embeddedchat`)
 
 `pkg/embeddedchat` is a thin wrapper around the Docker Agent runtime that lets you drive an agent from your own UI instead of running Docker Agent's Bubble Tea application. It handles runtime construction, event projection, and conversation state, exposing a simple `Send` / `Confirm` / `Restart` / `Close` API.

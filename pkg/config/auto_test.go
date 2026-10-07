@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
@@ -99,7 +100,7 @@ func TestAvailableProviders_NoGateway(t *testing.T) {
 			envVars: map[string]string{
 				"FIREWORKS_API_KEY": "test-key",
 			},
-			expectedProvider: "fireworks",
+			expectedProvider: "fireworks-ai",
 		},
 		{
 			name: "deepseek api key present",
@@ -120,7 +121,7 @@ func TestAvailableProviders_NoGateway(t *testing.T) {
 			envVars: map[string]string{
 				"TOGETHER_API_KEY": "test-key",
 			},
-			expectedProvider: "together",
+			expectedProvider: "togetherai",
 		},
 		{
 			name: "huggingface token present",
@@ -134,7 +135,7 @@ func TestAvailableProviders_NoGateway(t *testing.T) {
 			envVars: map[string]string{
 				"MOONSHOT_API_KEY": "test-key",
 			},
-			expectedProvider: "moonshot",
+			expectedProvider: "moonshotai",
 		},
 		{
 			name: "vercel ai gateway key present",
@@ -337,7 +338,7 @@ func TestAutoModelConfig(t *testing.T) {
 			envVars: map[string]string{
 				"FIREWORKS_API_KEY": "test-key",
 			},
-			expectedProvider:  "fireworks",
+			expectedProvider:  "fireworks-ai",
 			expectedModel:     "accounts/fireworks/models/kimi-k3",
 			expectedMaxTokens: 32000,
 		},
@@ -364,7 +365,7 @@ func TestAutoModelConfig(t *testing.T) {
 			envVars: map[string]string{
 				"TOGETHER_API_KEY": "test-key",
 			},
-			expectedProvider:  "together",
+			expectedProvider:  "togetherai",
 			expectedModel:     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
 			expectedMaxTokens: 32000,
 		},
@@ -382,7 +383,7 @@ func TestAutoModelConfig(t *testing.T) {
 			envVars: map[string]string{
 				"MOONSHOT_API_KEY": "test-key",
 			},
-			expectedProvider:  "moonshot",
+			expectedProvider:  "moonshotai",
 			expectedModel:     "kimi-k3",
 			expectedMaxTokens: 32000,
 		},
@@ -477,7 +478,7 @@ func TestDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Test that DefaultModels map has all expected providers
-	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks", "deepseek", "cerebras", "together", "huggingface", "moonshot", "vercel", "amazon-bedrock", "opencode-zen", "opencode-go", "github-copilot"}
+	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks-ai", "deepseek", "cerebras", "togetherai", "huggingface", "moonshotai", "vercel", "amazon-bedrock", "opencode", "opencode-go", "github-copilot"}
 
 	for _, provider := range expectedProviders {
 		t.Run(provider, func(t *testing.T) {
@@ -498,23 +499,23 @@ func TestDefaultModels(t *testing.T) {
 	assert.Equal(t, "deepseek-ai/DeepSeek-V4-Pro", DefaultModels["baseten"])
 	assert.Equal(t, "Qwen3.5-397B-A17B", DefaultModels["ovhcloud"])
 	assert.Equal(t, "llama-3.3-70b-versatile", DefaultModels["groq"])
-	assert.Equal(t, "accounts/fireworks/models/kimi-k3", DefaultModels["fireworks"])
+	assert.Equal(t, "accounts/fireworks/models/kimi-k3", DefaultModels["fireworks-ai"])
 	assert.Equal(t, "deepseek-v4-pro", DefaultModels["deepseek"])
 	assert.Equal(t, "gpt-oss-120b", DefaultModels["cerebras"])
-	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct-Turbo", DefaultModels["together"])
+	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct-Turbo", DefaultModels["togetherai"])
 	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct", DefaultModels["huggingface"])
-	assert.Equal(t, "kimi-k3", DefaultModels["moonshot"])
+	assert.Equal(t, "kimi-k3", DefaultModels["moonshotai"])
 	assert.Equal(t, "openai/gpt-5.6-sol", DefaultModels["vercel"])
 	assert.Equal(t, "global.anthropic.claude-sonnet-5", DefaultModels["amazon-bedrock"])
 	assert.Equal(t, "deepseek-v4-flash", DefaultModels["opencode-go"])
-	assert.Equal(t, "deepseek-v4-flash-free", DefaultModels["opencode-zen"])
+	assert.Equal(t, "deepseek-v4-flash-free", DefaultModels["opencode"])
 }
 
 func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Verify that AutoModelConfig always returns a model from DefaultModels
-	providers := []string{"openai", "anthropic", "google", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks", "deepseek", "cerebras", "together", "huggingface", "moonshot", "vercel", "opencode-zen", "github-copilot"}
+	providers := []string{"openai", "anthropic", "google", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks-ai", "deepseek", "cerebras", "togetherai", "huggingface", "moonshotai", "vercel", "opencode", "github-copilot"}
 
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
@@ -542,21 +543,21 @@ func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 				envVars["OVH_AI_ENDPOINTS_ACCESS_TOKEN"] = "test-token"
 			case "groq":
 				envVars["GROQ_API_KEY"] = "test-key"
-			case "fireworks":
+			case "fireworks-ai":
 				envVars["FIREWORKS_API_KEY"] = "test-key"
 			case "deepseek":
 				envVars["DEEPSEEK_API_KEY"] = "test-key"
 			case "cerebras":
 				envVars["CEREBRAS_API_KEY"] = "test-key"
-			case "together":
+			case "togetherai":
 				envVars["TOGETHER_API_KEY"] = "test-key"
 			case "huggingface":
 				envVars["HF_TOKEN"] = "test-token"
-			case "moonshot":
+			case "moonshotai":
 				envVars["MOONSHOT_API_KEY"] = "test-key"
 			case "vercel":
 				envVars["AI_GATEWAY_API_KEY"] = "test-key"
-			case "opencode-zen":
+			case "opencode":
 				envVars["OPENCODE_API_KEY"] = "test-key"
 			}
 
@@ -691,7 +692,7 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 		"DEEPSEEK_API_KEY":  "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
-	assert.Equal(t, "fireworks", providers[0])
+	assert.Equal(t, "fireworks-ai", providers[0])
 
 	// deepseek wins over cerebras
 	env = environment.NewMapEnvProvider(map[string]string{
@@ -715,7 +716,7 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 		"HF_TOKEN":         "test-token",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
-	assert.Equal(t, "together", providers[0])
+	assert.Equal(t, "togetherai", providers[0])
 
 	// huggingface wins over moonshot
 	env = environment.NewMapEnvProvider(map[string]string{
@@ -731,7 +732,7 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 		"AI_GATEWAY_API_KEY": "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
-	assert.Equal(t, "moonshot", providers[0])
+	assert.Equal(t, "moonshotai", providers[0])
 
 	// vercel wins over amazon-bedrock
 	env = environment.NewMapEnvProvider(map[string]string{
@@ -746,7 +747,7 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 		"OPENCODE_API_KEY": "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
-	assert.Equal(t, "opencode-zen", providers[0])
+	assert.Equal(t, "opencode", providers[0])
 
 	// No keys at all - dmr should be selected
 	env = environment.NewNoEnvProvider()
@@ -1182,34 +1183,33 @@ func TestCloudProviderEnvVars(t *testing.T) {
 	assert.Equal(t, []string{"GITHUB_TOKEN", "GH_TOKEN"}, providers[copilotIdx].EnvVars)
 }
 
-// TestDefaultModelsExistInModelsDev is the regression test for issue #4133:
-// DefaultModels must reference models that actually exist in the models.dev
-// catalog, since AutoModelConfig hands them straight to real users with no
-// other validation. modelsDevAbsentProviders and modelsDevCatalogProviders
-// (both defined in examples_test.go) are reused so providers legitimately
-// absent, or aliased under a different id, in the catalog don't produce
-// false failures.
+// Defaults must resolve through the production lookup against the committed snapshot.
 func TestDefaultModelsExistInModelsDev(t *testing.T) {
 	t.Parallel()
-
-	modelsStore, err := modelsdev.NewStore()
-	require.NoError(t, err)
-
-	for provider, model := range DefaultModels {
-		t.Run(provider, func(t *testing.T) {
+	store := modelsdev.NewDatabaseStore(modelsdev.EmbeddedSnapshot())
+	for providerID, model := range DefaultModels {
+		t.Run(providerID, func(t *testing.T) {
 			t.Parallel()
-
-			if modelsDevAbsentProviders[provider] {
-				t.Skipf("provider %q is not expected to exist in the models.dev catalog", provider)
+			require.True(t, provider.IsKnownProvider(providerID))
+			require.Equal(t, providerID, modelsdev.CanonicalProviderID(providerID))
+			if providerID == "dmr" {
+				return // Local models are not catalogued.
 			}
-
-			catalogProvider := provider
-			if id, ok := modelsDevCatalogProviders[provider]; ok {
-				catalogProvider = id
+			if providerID == "chatgpt" {
+				// ChatGPT is distinct; only its model names are validated against OpenAI.
+				providerID = "openai"
 			}
-
-			_, err := modelsStore.GetModel(t.Context(), modelsdev.NewID(catalogProvider, model))
-			require.NoError(t, err, "DefaultModels[%q] = %q must exist in the models.dev catalog", provider, model)
+			_, err := store.GetModel(t.Context(), modelsdev.NewID(providerID, model))
+			require.NoError(t, err)
 		})
+	}
+}
+
+func TestCloudProvidersCanonical(t *testing.T) {
+	t.Parallel()
+	for _, cfg := range cloudProviders {
+		assert.Equal(t, cfg.name, modelsdev.CanonicalProviderID(cfg.name))
+		assert.True(t, provider.IsKnownProvider(cfg.name), cfg.name)
+		assert.Contains(t, DefaultModels, cfg.name)
 	}
 }

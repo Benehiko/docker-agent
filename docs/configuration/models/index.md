@@ -18,7 +18,7 @@ models:
     first_available: [list] # Optional: candidate model refs, tried in order by available credentials.
                             # Mutually exclusive with other model settings.
     provider: string # Required unless using first_available. One of: openai, anthropic, google, amazon-bedrock,
-                     # dmr, mistral, xai, nebius, nvidia, minimax, baseten, ovhcloud, groq, fireworks, deepseek, cerebras, together, huggingface, moonshot, vercel, cloudflare-workers-ai, cloudflare-ai-gateway, requesty, openrouter,
+                     # dmr, mistral, xai, nebius, nvidia, minimax, baseten, ovhcloud, groq, fireworks-ai, deepseek, cerebras, togetherai, huggingface, moonshotai, vercel, cloudflare-workers-ai, cloudflare-ai-gateway, requesty, openrouter,
                      # azure, ollama, github-copilot, or a named provider defined
                      # under the top-level `providers:` section.
     model: string # Required: model identifier
@@ -60,7 +60,7 @@ models:
 | Property              | Type       | Required | Description                                                                           |
 | --------------------- | ---------- | -------- | ------------------------------------------------------------------------------------- |
 | `first_available`     | array      | ✗        | Candidate model references tried in order; selects the first whose credentials are configured. Mutually exclusive with other model settings. |
-| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks`, `deepseek`, `cerebras`, `together`, `huggingface`, `moonshot`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `azure`, `ollama`, `github-copilot`, `chatgpt`, or any [named provider](../../providers/custom/index.md). |
+| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks-ai`, `deepseek`, `cerebras`, `togetherai`, `huggingface`, `moonshotai`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `azure`, `ollama`, `github-copilot`, `chatgpt`, `opencode`, `opencode-go`, or any [named provider](../../providers/custom/index.md). |
 | `model`               | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Model name (e.g., `gpt-4o`, `claude-sonnet-4-5`, `gemini-3.5-flash`) |
 | `description`         | string     | ✗        | Informational, human-readable summary of the model's purpose or strengths (e.g., "fast and cheap, good for summaries"). Not sent to the model. Can be combined with `first_available` (a selector's description is kept when it resolves). |
 | `temperature`         | float      | ✗        | Sampling randomness. Range is provider-dependent — typically `0.0–2.0` (Anthropic caps at `1.0`). `0.0` is deterministic. |
@@ -83,6 +83,12 @@ models:
 | `compaction_model`    | string     | ✗        | Model used for session compaction (summary generation). Can be a named model or an inline `provider/model` string. The agent-level `compaction_model` takes precedence over this value, which in turn takes precedence over a provider-level default. When none is set, the primary model compacts. Cannot be combined with `first_available`. See the [Context & Compaction guide](../../guides/compaction/index.md). |
 | `compaction_threshold` | float     | ✗        | Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than `0` and at most `1`. Takes precedence over the agent-level `compaction_threshold`. Cannot be combined with `first_available`. Default: `0.9`. See the [Context & Compaction guide](../../guides/compaction/index.md). |
 | `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `DOCKER_AGENT_MODELS_GATEWAY`) is configured. Implied by a custom `base_url`. See [Gateway Bypass](#gateway-bypass). |
+
+Built-in provider IDs use models.dev names: `fireworks-ai`, `togetherai`,
+`moonshotai`, and `opencode`. Existing configurations using `fireworks`,
+`together`, `moonshot`, or `opencode-zen` continue to work without warnings.
+New configurations using canonical IDs require a version that supports them.
+Explicitly named custom providers still take precedence.
 
 ## Attachment Capability Overrides
 
@@ -550,7 +556,7 @@ for a complete local-server configuration.
 ## Custom HTTP Headers
 
 For OpenAI-compatible providers (`openai`, `github-copilot`, `mistral`, `xai`,
-`nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks`, `deepseek`, `cerebras`, `together`, `huggingface`, `moonshot`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `ollama`, and any custom provider using the OpenAI API),
+`nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks-ai`, `deepseek`, `cerebras`, `togetherai`, `huggingface`, `moonshotai`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `ollama`, and any custom provider using the OpenAI API),
 `provider_opts.http_headers` adds arbitrary HTTP headers to every outgoing
 request:
 

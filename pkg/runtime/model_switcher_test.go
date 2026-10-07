@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -1371,5 +1372,47 @@ func TestAgentThinkingConfigurationIsLocalAndConservative(t *testing.T) {
 				assert.Equal(t, effort.High, current)
 			}
 		})
+	}
+}
+
+func TestBuildCatalogChoices_CanonicalProviders(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		for _, custom := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/custom=%t", legacy, custom), func(t *testing.T) {
+				t.Parallel()
+				canonical := modelsdev.CanonicalProviderID(legacy)
+				alias, ok := provider.LookupAlias(canonical)
+				require.True(t, ok)
+				r := &LocalRuntime{
+					modelsStore: &mockCatalogStore{db: &modelsdev.Database{Providers: map[string]modelsdev.Provider{
+						canonical: {Models: map[string]modelsdev.Model{
+							"configured": {Modalities: modelsdev.Modalities{Output: []string{"text"}}},
+							"available":  {Modalities: modelsdev.Modalities{Output: []string{"text"}}},
+						}},
+					}}},
+					modelSwitcherCfg: &ModelSwitcherConfig{
+						ProviderRegistry: testProviderRegistry(),
+						EnvProvider:      environment.NewMapEnvProvider(map[string]string{alias.TokenEnvVar: "test-key"}),
+						Models:           map[string]latest.ModelConfig{"mine": {Provider: legacy, Model: "configured"}},
+					},
+				}
+				if custom {
+					r.modelSwitcherCfg.Providers = map[string]latest.ProviderConfig{legacy: {BaseURL: "https://custom.invalid/v1"}}
+				}
+				choices := r.buildCatalogChoices(t.Context())
+				wantLen := 1
+				if custom {
+					wantLen = 2
+				}
+				require.Len(t, choices, wantLen)
+				for _, choice := range choices {
+					assert.Equal(t, canonical, choice.Provider)
+					if !custom {
+						assert.Equal(t, canonical+"/available", choice.Ref)
+					}
+				}
+			})
+		}
 	}
 }

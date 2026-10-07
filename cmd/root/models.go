@@ -46,8 +46,8 @@ const listTimeout = 5 * time.Second
 // from the snapshot) prevents surprising side effects like `docker agent models
 // --provider ollama` issuing a real GET against localhost.
 var liveFetchProviders = map[string]bool{
-	"opencode-zen": true,
-	"opencode-go":  true,
+	"opencode":    true,
+	"opencode-go": true,
 }
 
 // modelRow represents a single model entry for display or serialization.
@@ -134,6 +134,9 @@ func (f *modelsListFlags) runModelsListCommand(cmd *cobra.Command, args []string
 	// strings.EqualFold does in the outer row filter below.
 	if f.providerFilter != "" {
 		f.providerFilter = strings.ToLower(f.providerFilter)
+		if _, custom := f.runConfig.Providers[f.providerFilter]; !custom {
+			f.providerFilter = modelsdev.CanonicalProviderID(f.providerFilter)
+		}
 	}
 
 	// Determine which model auto-selection would pick. DMR discovery is left

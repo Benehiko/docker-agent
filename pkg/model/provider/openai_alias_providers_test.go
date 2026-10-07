@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,11 +22,12 @@ import (
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
 // openAIAliasProvider describes a built-in OpenAI-compatible alias provider
-// (deepseek, cerebras, fireworks, ...) for the shared wiring tests below. New
+// (deepseek, cerebras, fireworks-ai, ...) for the shared wiring tests below. New
 // aliases of the same shape only need a row here rather than a fresh copy of
 // the whole end-to-end/live test.
 type openAIAliasProvider struct {
@@ -161,7 +163,14 @@ var openAIAliasProviders = []openAIAliasProvider{
 func TestOpenAIAliasProvider_EndToEndRequest(t *testing.T) {
 	t.Parallel()
 
+	providers := slices.Clone(openAIAliasProviders)
 	for _, p := range openAIAliasProviders {
+		if canonical := modelsdev.CanonicalProviderID(p.provider); canonical != p.provider {
+			p.provider = canonical
+			providers = append(providers, p)
+		}
+	}
+	for _, p := range providers {
 		t.Run(p.provider, func(t *testing.T) {
 			t.Parallel()
 

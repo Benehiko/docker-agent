@@ -42,7 +42,7 @@ type providerConfig struct {
 // The first provider with a configured API key will be selected by AutoModelConfig.
 // DMR is always appended as the final fallback (not listed here).
 //
-// opencode-zen is ordered before opencode-go because both share OPENCODE_API_KEY:
+// opencode is ordered before opencode-go because both share OPENCODE_API_KEY:
 // when the key is set, Zen wins auto-selection. A subscriber who only uses Go
 // should set the provider explicitly (e.g. `--model opencode-go/...`) rather than
 // relying on auto; see docs/providers/opencode-go for details.
@@ -65,12 +65,12 @@ var cloudProviders = []providerConfig{
 	{"baseten", []string{"BASETEN_API_KEY"}, "BASETEN_API_KEY", "BASETEN_API_KEY"},
 	{"ovhcloud", []string{"OVH_AI_ENDPOINTS_ACCESS_TOKEN"}, "OVH_AI_ENDPOINTS_ACCESS_TOKEN", "OVH_AI_ENDPOINTS_ACCESS_TOKEN"},
 	{"groq", []string{"GROQ_API_KEY"}, "GROQ_API_KEY", "GROQ_API_KEY"},
-	{"fireworks", []string{"FIREWORKS_API_KEY"}, "FIREWORKS_API_KEY", "FIREWORKS_API_KEY"},
+	{"fireworks-ai", []string{"FIREWORKS_API_KEY"}, "FIREWORKS_API_KEY", "FIREWORKS_API_KEY"},
 	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"},
 	{"cerebras", []string{"CEREBRAS_API_KEY"}, "CEREBRAS_API_KEY", "CEREBRAS_API_KEY"},
-	{"together", []string{"TOGETHER_API_KEY"}, "TOGETHER_API_KEY", "TOGETHER_API_KEY"},
+	{"togetherai", []string{"TOGETHER_API_KEY"}, "TOGETHER_API_KEY", "TOGETHER_API_KEY"},
 	{"huggingface", []string{"HF_TOKEN"}, "HF_TOKEN", "HF_TOKEN"},
-	{"moonshot", []string{"MOONSHOT_API_KEY"}, "MOONSHOT_API_KEY", "MOONSHOT_API_KEY"},
+	{"moonshotai", []string{"MOONSHOT_API_KEY"}, "MOONSHOT_API_KEY", "MOONSHOT_API_KEY"},
 	{"vercel", []string{"AI_GATEWAY_API_KEY"}, "AI_GATEWAY_API_KEY", "AI_GATEWAY_API_KEY"},
 	{"amazon-bedrock", []string{
 		"AWS_BEARER_TOKEN_BEDROCK",
@@ -78,7 +78,7 @@ var cloudProviders = []providerConfig{
 		"AWS_PROFILE",
 		"AWS_ROLE_ARN",
 	}, "AWS_ACCESS_KEY_ID (or AWS_PROFILE, AWS_ROLE_ARN, AWS_BEARER_TOKEN_BEDROCK)", ""},
-	{"opencode-zen", []string{"OPENCODE_API_KEY"}, "OPENCODE_API_KEY", "OPENCODE_API_KEY"},
+	{"opencode", []string{"OPENCODE_API_KEY"}, "OPENCODE_API_KEY", "OPENCODE_API_KEY"},
 	{"opencode-go", []string{"OPENCODE_API_KEY"}, "OPENCODE_API_KEY", "OPENCODE_API_KEY"},
 }
 
@@ -161,16 +161,16 @@ var DefaultModels = map[string]string{
 	"baseten":        "deepseek-ai/DeepSeek-V4-Pro",
 	"ovhcloud":       "Qwen3.5-397B-A17B",
 	"groq":           "llama-3.3-70b-versatile",
-	"fireworks":      "accounts/fireworks/models/kimi-k3",
+	"fireworks-ai":   "accounts/fireworks/models/kimi-k3",
 	"deepseek":       "deepseek-v4-pro",
 	"cerebras":       "gpt-oss-120b",
-	"together":       "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+	"togetherai":     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
 	"huggingface":    "meta-llama/Llama-3.3-70B-Instruct",
-	"moonshot":       "kimi-k3",
+	"moonshotai":     "kimi-k3",
 	"vercel":         "openai/gpt-5.6-sol",
 	"amazon-bedrock": "global.anthropic.claude-sonnet-5",
 	"opencode-go":    "deepseek-v4-flash",
-	"opencode-zen":   "deepseek-v4-flash-free",
+	"opencode":       "deepseek-v4-flash-free",
 }
 
 // nonForwardableTokenEnvVars lists provider token env vars that are NOT safe to

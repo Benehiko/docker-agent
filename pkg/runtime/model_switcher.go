@@ -744,7 +744,11 @@ func (r *LocalRuntime) buildCatalogChoices(ctx context.Context) []ModelChoice {
 	for name, cfg := range r.modelSwitcherCfg.Models {
 		existingRefs[name] = true
 		if cfg.Provider != "" && cfg.Model != "" {
-			existingRefs[cfg.Provider+"/"+cfg.Model] = true
+			providerID := cfg.Provider
+			if _, custom := r.modelSwitcherCfg.Providers[providerID]; !custom {
+				providerID = modelsdev.CanonicalProviderID(providerID)
+			}
+			existingRefs[providerID+"/"+cfg.Model] = true
 		}
 	}
 

@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
 func TestLookupAlias(t *testing.T) {
@@ -36,18 +38,18 @@ func TestCatalogAliases(t *testing.T) {
 	t.Parallel()
 
 	expected := map[string]Alias{
-		"openrouter":  {APIType: "openai", BaseURL: "https://openrouter.ai/api/v1", TokenEnvVar: "OPENROUTER_API_KEY"},
-		"baseten":     {APIType: "openai", BaseURL: "https://inference.baseten.co/v1", TokenEnvVar: "BASETEN_API_KEY"},
-		"ovhcloud":    {APIType: "openai", BaseURL: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", TokenEnvVar: "OVH_AI_ENDPOINTS_ACCESS_TOKEN"},
-		"groq":        {APIType: "openai", BaseURL: "https://api.groq.com/openai/v1", TokenEnvVar: "GROQ_API_KEY"},
-		"deepseek":    {APIType: "openai", BaseURL: "https://api.deepseek.com/v1", TokenEnvVar: "DEEPSEEK_API_KEY"},
-		"cerebras":    {APIType: "openai", BaseURL: "https://api.cerebras.ai/v1", TokenEnvVar: "CEREBRAS_API_KEY"},
-		"fireworks":   {APIType: "openai", BaseURL: "https://api.fireworks.ai/inference/v1", TokenEnvVar: "FIREWORKS_API_KEY"},
-		"together":    {APIType: "openai", BaseURL: "https://api.together.xyz/v1", TokenEnvVar: "TOGETHER_API_KEY"},
-		"huggingface": {APIType: "openai", BaseURL: "https://router.huggingface.co/v1", TokenEnvVar: "HF_TOKEN"},
-		"moonshot":    {APIType: "openai", BaseURL: "https://api.moonshot.ai/v1", TokenEnvVar: "MOONSHOT_API_KEY"},
-		"nvidia":      {APIType: "openai", BaseURL: "https://integrate.api.nvidia.com/v1", TokenEnvVar: "NVIDIA_API_KEY"},
-		"vercel":      {APIType: "openai", BaseURL: "https://ai-gateway.vercel.sh/v1", TokenEnvVar: "AI_GATEWAY_API_KEY"},
+		"openrouter":   {APIType: "openai", BaseURL: "https://openrouter.ai/api/v1", TokenEnvVar: "OPENROUTER_API_KEY"},
+		"baseten":      {APIType: "openai", BaseURL: "https://inference.baseten.co/v1", TokenEnvVar: "BASETEN_API_KEY"},
+		"ovhcloud":     {APIType: "openai", BaseURL: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", TokenEnvVar: "OVH_AI_ENDPOINTS_ACCESS_TOKEN"},
+		"groq":         {APIType: "openai", BaseURL: "https://api.groq.com/openai/v1", TokenEnvVar: "GROQ_API_KEY"},
+		"deepseek":     {APIType: "openai", BaseURL: "https://api.deepseek.com/v1", TokenEnvVar: "DEEPSEEK_API_KEY"},
+		"cerebras":     {APIType: "openai", BaseURL: "https://api.cerebras.ai/v1", TokenEnvVar: "CEREBRAS_API_KEY"},
+		"fireworks-ai": {APIType: "openai", BaseURL: "https://api.fireworks.ai/inference/v1", TokenEnvVar: "FIREWORKS_API_KEY"},
+		"togetherai":   {APIType: "openai", BaseURL: "https://api.together.xyz/v1", TokenEnvVar: "TOGETHER_API_KEY"},
+		"huggingface":  {APIType: "openai", BaseURL: "https://router.huggingface.co/v1", TokenEnvVar: "HF_TOKEN"},
+		"moonshotai":   {APIType: "openai", BaseURL: "https://api.moonshot.ai/v1", TokenEnvVar: "MOONSHOT_API_KEY"},
+		"nvidia":       {APIType: "openai", BaseURL: "https://integrate.api.nvidia.com/v1", TokenEnvVar: "NVIDIA_API_KEY"},
+		"vercel":       {APIType: "openai", BaseURL: "https://ai-gateway.vercel.sh/v1", TokenEnvVar: "AI_GATEWAY_API_KEY"},
 	}
 
 	for name, want := range expected {
@@ -117,4 +119,38 @@ func TestEachAlias_EarlyTermination(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, count, "iteration should stop when consumer breaks out")
+}
+
+func TestProviderIDsMatchEmbeddedCatalog(t *testing.T) {
+	t.Parallel()
+	db := modelsdev.EmbeddedSnapshot()
+	absent := map[string]string{
+		"chatgpt": "subscription backend, distinct from OpenAI",
+		"dmr":     "local Docker Model Runner",
+		"ollama":  "local Ollama server",
+	}
+	for _, name := range AllProviders() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, name, modelsdev.CanonicalProviderID(name))
+			_, exists := db.Providers[name]
+			if reason, exempt := absent[name]; exempt {
+				assert.False(t, exists, "remove stale exemption: %s", reason)
+			} else {
+				assert.True(t, exists, "built-in provider must use its models.dev ID")
+			}
+		})
+	}
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		canonical := modelsdev.CanonicalProviderID(legacy)
+		assert.NotEqual(t, legacy, canonical)
+		assert.NotContains(t, Aliases, legacy)
+		assert.NotContains(t, AllProviders(), legacy)
+		assert.NotContains(t, db.Providers, legacy, "legacy ID now collides with an upstream service")
+		require.Contains(t, Aliases, canonical)
+		got, ok := LookupAlias(legacy)
+		require.True(t, ok)
+		assert.Equal(t, Aliases[canonical], got)
+		assert.True(t, IsKnownProvider(legacy))
+	}
 }

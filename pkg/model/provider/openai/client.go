@@ -30,6 +30,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
 	"github.com/docker/docker-agent/pkg/modelinfo"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/rag/prompts"
 	"github.com/docker/docker-agent/pkg/rag/types"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -256,16 +257,16 @@ func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) [
 // (openai, mistral, xai, minimax, github-copilot, opencode) tolerate multiple
 // system messages and are deliberately absent so their behavior is unchanged.
 var openModelHostProviders = map[string]bool{
-	"baseten":     true,
-	"ovhcloud":    true,
-	"openrouter":  true,
-	"nebius":      true,
-	"nvidia":      true,
-	"cerebras":    true,
-	"fireworks":   true,
-	"together":    true,
-	"huggingface": true,
-	"vercel":      true,
+	"baseten":      true,
+	"ovhcloud":     true,
+	"openrouter":   true,
+	"nebius":       true,
+	"nvidia":       true,
+	"cerebras":     true,
+	"fireworks-ai": true,
+	"togetherai":   true,
+	"huggingface":  true,
+	"vercel":       true,
 	// Cloudflare Workers AI serves open-weight models directly; the AI Gateway
 	// fronts them (and other providers) through one endpoint. Both plausibly
 	// reach models with strict single-system-message chat templates.
@@ -301,7 +302,7 @@ func shouldMergeConsecutiveMessages(cfg *latest.ModelConfig) bool {
 	if cfg.Provider == "openai" && cfg.BaseURL != "" {
 		return true
 	}
-	return openModelHostProviders[cfg.Provider]
+	return openModelHostProviders[modelsdev.CanonicalProviderID(cfg.Provider)]
 }
 
 // contextLimit returns this model's context window in tokens, preferring an
@@ -1449,8 +1450,8 @@ func isCustomProvider(cfg *latest.ModelConfig) bool {
 // driven by modelinfo.SupportsResponsesAPI so new models are picked up by
 // naming convention rather than a hardcoded allow-list.
 func autoSelectsResponsesAPI(provider string) bool {
-	switch provider {
-	case "openai", "github-copilot", "opencode-zen", chatgpt.ProviderName:
+	switch modelsdev.CanonicalProviderID(provider) {
+	case "openai", "github-copilot", "opencode", chatgpt.ProviderName:
 		return true
 	}
 	return false

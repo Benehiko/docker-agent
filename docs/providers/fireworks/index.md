@@ -15,6 +15,8 @@ models, serving Kimi, Qwen, DeepSeek, GLM and others through an
 OpenAI-compatible API. Docker Agent includes built-in support for Fireworks AI
 as an alias provider.
 
+Use the provider ID `fireworks-ai`. The legacy ID `fireworks` is also accepted.
+
 ## Setup
 
 1. Create an API key from the [Fireworks dashboard](https://fireworks.ai/account/api-keys).
@@ -33,7 +35,7 @@ The simplest way to use Fireworks AI:
 ```yaml
 agents:
   root:
-    model: fireworks/accounts/fireworks/models/kimi-k3
+    model: fireworks-ai/accounts/fireworks/models/kimi-k3
     description: Assistant using Fireworks AI
     instruction: You are a helpful assistant.
 ```
@@ -45,7 +47,7 @@ For more control over parameters:
 ```yaml
 models:
   fireworks_model:
-    provider: fireworks
+    provider: fireworks-ai
     model: accounts/fireworks/models/kimi-k3
     temperature: 0.7
     max_tokens: 8192
@@ -93,7 +95,7 @@ messages into a single one for this provider.
 ```yaml
 agents:
   coder:
-    model: fireworks/accounts/fireworks/models/kimi-k2p7-code
+    model: fireworks-ai/accounts/fireworks/models/kimi-k2p7-code
     description: Code assistant using Kimi K2.7 Code on Fireworks AI
     instruction: |
       You are an expert programmer.

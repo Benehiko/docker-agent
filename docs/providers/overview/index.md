@@ -44,7 +44,7 @@ Use this table to find a built-in provider's config key and authentication metho
 | [AWS Bedrock](../bedrock/index.md) | `amazon-bedrock` | `AWS_BEARER_TOKEN_BEDROCK` or the standard AWS credentials chain |
 | [Docker Model Runner](../dmr/index.md) | `dmr` | None (local) |
 | ChatGPT (OpenAI account) | [`chatgpt`](../chatgpt/index.md) | None (sign in via `docker agent setup`) |
-| OpenCode Zen   | `opencode-zen`   | `OPENCODE_API_KEY`                  |
+| OpenCode Zen   | `opencode`   | `OPENCODE_API_KEY`                  |
 | OpenCode Go    | `opencode-go`    | `OPENCODE_API_KEY`                  |
 | Mistral        | `mistral`        | `MISTRAL_API_KEY`                   |
 | xAI (Grok)     | `xai`            | `XAI_API_KEY`                       |
@@ -54,13 +54,13 @@ Use this table to find a built-in provider's config key and authentication metho
 | Baseten        | `baseten`        | `BASETEN_API_KEY`                   |
 | OVHcloud       | `ovhcloud`       | `OVH_AI_ENDPOINTS_ACCESS_TOKEN`     |
 | Groq           | `groq`           | `GROQ_API_KEY`                      |
-| Fireworks AI   | `fireworks`      | `FIREWORKS_API_KEY`                 |
+| Fireworks AI   | `fireworks-ai`      | `FIREWORKS_API_KEY`                 |
 | DeepSeek       | `deepseek`       | `DEEPSEEK_API_KEY`                  |
 | Cerebras       | `cerebras`       | `CEREBRAS_API_KEY`                  |
-| Together AI    | `together`       | `TOGETHER_API_KEY`                  |
+| Together AI    | `togetherai`       | `TOGETHER_API_KEY`                  |
 | Hugging Face   | `huggingface`    | `HF_TOKEN`                          |
 | Cloudflare Workers AI | `cloudflare-workers-ai` | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
-| Moonshot AI    | `moonshot`       | `MOONSHOT_API_KEY`                  |
+| Moonshot AI    | `moonshotai`       | `MOONSHOT_API_KEY`                  |
 | Vercel AI Gateway | `vercel`      | `AI_GATEWAY_API_KEY`                |
 | Cloudflare AI Gateway | `cloudflare-ai-gateway` | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
 | Requesty       | `requesty`       | `REQUESTY_API_KEY`                  |
@@ -111,3 +111,10 @@ agents:
   helper:
     model: local # helper runs locally for free
 ```
+
+Built-in provider IDs follow the models.dev catalogue. The legacy IDs
+`fireworks`, `together`, `moonshot`, and `opencode-zen` remain accepted as
+`fireworks-ai`, `togetherai`, `moonshotai`, and `opencode`, respectively. New
+configurations use the canonical IDs; older Docker Agent binaries may not
+recognize them. API model names, URLs, and environment variables are unchanged.
+Custom provider definitions take precedence over built-in IDs.

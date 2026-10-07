@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
@@ -804,4 +805,58 @@ func TestModelsListCommand_AliasCredentialsListAliasModels(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	assert.Contains(t, buf.String(), "grok-4", "an alias credential must surface the alias's catalog models without --all")
+}
+
+func TestModelsListCommand_LegacyProviderFilter(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		t.Run(legacy, func(t *testing.T) {
+			t.Parallel()
+			canonical := modelsdev.CanonicalProviderID(legacy)
+			alias, ok := provider.LookupAlias(canonical)
+			require.True(t, ok)
+			var buf bytes.Buffer
+			cmd := newModelsCmd(func(rc *config.RuntimeConfig) {
+				rc.EnvProviderForTests = environment.NewMapEnvProvider(map[string]string{alias.TokenEnvVar: "test-key"})
+				rc.Providers = map[string]latest.ProviderConfig{}
+				rc.ModelsDevStoreOverride = modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
+					canonical: {Models: map[string]modelsdev.Model{"catalog-only": {Modalities: modelsdev.Modalities{Output: []string{"text"}}}}},
+				}})
+			})
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
+			cmd.SetArgs([]string{"--provider", legacy, "--format", "json"})
+			require.NoError(t, cmd.Execute())
+			var rows []modelRow
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+			require.NotEmpty(t, rows)
+			var catalogFound bool
+			for _, row := range rows {
+				assert.Equal(t, canonical, row.Provider)
+				catalogFound = catalogFound || row.Model == "catalog-only"
+			}
+			assert.True(t, catalogFound)
+		})
+	}
+}
+
+func TestModelsListCommand_LegacyNamedCustomProviderFilter(t *testing.T) {
+	t.Parallel()
+	server, _ := newCustomProviderServer(t, []string{"custom-model"})
+	var buf bytes.Buffer
+	cmd := newModelsCmd(
+		withTestConfig(map[string]string{"MYPROVIDER_API_KEY": "custom-key"}),
+		withProviders(map[string]latest.ProviderConfig{
+			"fireworks": {BaseURL: server.URL, TokenKey: "MYPROVIDER_API_KEY"},
+		}),
+	)
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--provider", "fireworks", "--format", "json"})
+	require.NoError(t, cmd.Execute())
+	var rows []modelRow
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "fireworks", rows[0].Provider)
+	assert.Equal(t, "custom-model", rows[0].Model)
 }

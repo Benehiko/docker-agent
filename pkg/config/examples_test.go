@@ -18,16 +18,10 @@ import (
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
-// modelsDevCatalogProviders maps a docker-agent provider name to the id
-// models.dev actually catalogs it under, for providers where the two
-// diverge. Resolving through this map (instead of skipping validation
-// outright) is what caught the stale Fireworks model reference in #4132.
+// modelsDevCatalogProviders validates ChatGPT example names against OpenAI's
+// catalog without treating the subscription backend as a full metadata alias.
 var modelsDevCatalogProviders = map[string]string{
-	"fireworks":    "fireworks-ai", // models.dev catalogs Fireworks under the "fireworks-ai" id, not "fireworks"
-	"together":     "togetherai",   // models.dev catalogs Together AI under the "togetherai" id, not "together"
-	"moonshot":     "moonshotai",   // models.dev catalogs Moonshot AI under the "moonshotai" id, not "moonshot"
-	"chatgpt":      "openai",       // ChatGPT subscription backend; models.dev catalogs its models under the "openai" id
-	"opencode-zen": "opencode",     // models.dev catalogs the OpenCode Zen router under the "opencode" id
+	"chatgpt": "openai",
 }
 
 // modelsDevAbsentProviders lists providers that are valid at runtime but
@@ -36,7 +30,6 @@ var modelsDevCatalogProviders = map[string]string{
 // lookups for these to avoid false failures.
 var modelsDevAbsentProviders = map[string]bool{
 	"dmr":                   true, // Docker Model Runner (local, not in catalog)
-	"ovhcloud":              true, // models.dev lower-cases OVHcloud model ids (e.g. "qwen3.5-397b-a17b"); the provider API is case-sensitive and takes "Qwen3.5-397B-A17B"
 	"cloudflare-workers-ai": true, // example uses an @cf/... model id not present in the models.dev snapshot (only variant ids like -fp8 are listed)
 	"cloudflare-ai-gateway": true, // multi-provider router; example model ids use the gateway's provider/model form, not guaranteed to match a models.dev id
 }
@@ -69,9 +62,8 @@ func collectExamples(t *testing.T) []string {
 // from the environment's credentials, routed models span multiple
 // providers, custom providers are self-contained (already validated via
 // cfg.Providers), modelsDevAbsentProviders lists providers models.dev
-// deliberately does not catalog, and modelsDevCatalogProviders resolves
-// the remaining providers to the id models.dev actually catalogs them
-// under, when it diverges from the docker-agent provider name.
+// deliberately does not catalog, and modelsDevCatalogProviders validates
+// ChatGPT model names against OpenAI's catalog.
 func catalogModelRefs(cfg *latest.Config) []modelsdev.ID {
 	var ids []modelsdev.ID
 	for _, model := range cfg.Models {
@@ -237,6 +229,45 @@ func TestHCLExamplesMatchYAML(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, cfgYAML, cfgHCL, "HCL config %s differs from YAML sibling %s", file, yamlFile)
+		})
+	}
+}
+
+func TestExampleProvidersCanonical(t *testing.T) {
+	t.Parallel()
+	for _, example := range collectExamples(t) {
+		t.Run(example, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(t.Context(), hcl.NewSource(NewFileSource(example)))
+			require.NoError(t, err)
+			data, err := yaml.Marshal(cfg)
+			require.NoError(t, err)
+			var document any
+			require.NoError(t, yaml.Unmarshal(data, &document))
+			var check func(any)
+			check = func(value any) {
+				switch node := value.(type) {
+				case map[string]any:
+					for key, child := range node {
+						if key == "provider" {
+							if id, ok := child.(string); ok {
+								assert.Equal(t, id, modelsdev.CanonicalProviderID(id), "provider in %s", example)
+							}
+						}
+						check(child)
+					}
+				case []any:
+					for _, child := range node {
+						check(child)
+					}
+				case string:
+					// Inline refs also appear in fallback, routing and first_available lists.
+					if id, _, ok := strings.Cut(node, "/"); ok {
+						assert.Equal(t, id, modelsdev.CanonicalProviderID(id), "inline reference %s", node)
+					}
+				}
+			}
+			check(document)
 		})
 	}
 }

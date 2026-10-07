@@ -2,7 +2,7 @@
 
 models:
   fireworks_model:
-    provider: fireworks
+    provider: fireworks-ai
     model: accounts/fireworks/models/kimi-k3
 
 agents:

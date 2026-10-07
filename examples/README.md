@@ -193,6 +193,7 @@ remote MCP endpoints.
 | File | What it shows |
 |------|---------------|
 | [`custom_provider.yaml`](custom_provider.yaml) | Talking to any OpenAI-compatible endpoint via a custom provider. |
+| [`opencode-zen.yaml`](opencode-zen.yaml) | OpenCode Zen gateway (`opencode`). |
 | [`compose-secrets.yaml`](compose-secrets.yaml) | Reading API keys from Docker Compose / Swarm secrets. |
 | [`env_placeholders.yaml`](env_placeholders.yaml) | `${env.VAR}` substitution inside the YAML. |
 | [`model_env_substitution.yaml`](model_env_substitution.yaml) | `${env.VAR}` substitution in a model's `model` / `base_url`. |
@@ -200,12 +201,12 @@ remote MCP endpoints.
 | [`baseten.yaml`](baseten.yaml) | Baseten cloud provider. |
 | [`ovhcloud.yaml`](ovhcloud.yaml) | OVHcloud AI Endpoints provider. |
 | [`groq.yaml`](groq.yaml) | Groq fast-inference provider. |
-| [`fireworks.yaml`](fireworks.yaml) | Fireworks AI open-model inference provider. |
+| [`fireworks.yaml`](fireworks.yaml) | Fireworks AI open-model inference (`fireworks-ai`). |
 | [`deepseek.yaml`](deepseek.yaml) | DeepSeek chat and reasoning provider. |
 | [`cerebras.yaml`](cerebras.yaml) | Cerebras fast-inference provider. |
-| [`together.yaml`](together.yaml) | Together AI open-model inference provider. |
+| [`together.yaml`](together.yaml) | Together AI open-model inference (`togetherai`). |
 | [`huggingface.yaml`](huggingface.yaml) | Hugging Face Inference Providers open-model router. |
-| [`moonshot.yaml`](moonshot.yaml) | Moonshot AI (Kimi K2) provider. |
+| [`moonshot.yaml`](moonshot.yaml) | Moonshot AI Kimi provider (`moonshotai`). |
 | [`vercel.yaml`](vercel.yaml) | Vercel AI Gateway multi-provider router. |
 | [`cloudflare-workers-ai.yaml`](cloudflare-workers-ai.yaml) | Cloudflare Workers AI edge-hosted open models. |
 | [`cloudflare-ai-gateway.yaml`](cloudflare-ai-gateway.yaml) | Cloudflare AI Gateway multi-provider router. |
@@ -225,6 +226,10 @@ remote MCP endpoints.
 | [`sampling-opts.yaml`](sampling-opts.yaml) | Provider-specific sampling parameters (`top_k`, `repetition_penalty`, …). |
 | [`thinking_budget.yaml`](thinking_budget.yaml) | Reasoning/thinking budgets across OpenAI, Anthropic and Google. |
 | [`task_budget.yaml`](task_budget.yaml) | Anthropic `task_budget`: cap total tokens spent across a multi-step agentic task. |
+
+Provider examples use the canonical IDs `fireworks-ai`, `togetherai`,
+`moonshotai`, and `opencode`. The old IDs `fireworks`, `together`, `moonshot`,
+and `opencode-zen` remain accepted for existing configurations.
 
 ---
 

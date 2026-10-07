@@ -14,6 +14,8 @@ _Use OpenCode Zen models with Docker Agent._
 
 Docker Agent includes built-in support for OpenCode Zen as an alias provider for OpenAI-compatible models. Anthropic and Google models are supported via custom provider definitions.
 
+Use the provider ID `opencode`. The legacy ID `opencode-zen` is also accepted.
+
 ## Setup
 
 1. Sign in to [OpenCode Zen](https://opencode.ai/auth), add billing information, and copy your API key
@@ -38,7 +40,7 @@ The simplest way to use OpenCode Zen with a free model:
 ```yaml
 agents:
   root:
-    model: opencode-zen/deepseek-v4-flash-free
+    model: opencode/deepseek-v4-flash-free
     description: Assistant using OpenCode Zen (free)
     instruction: You are a helpful assistant.
 ```
@@ -50,7 +52,7 @@ For more control over parameters:
 ```yaml
 models:
   zen_model:
-    provider: opencode-zen
+    provider: opencode
     model: gpt-5.5
     temperature: 0.7
     max_tokens: 16384
@@ -80,7 +82,7 @@ These models are available at no cost:
 
 ### OpenAI-Compatible (Chat Completions)
 
-These models use the `/v1/chat/completions` endpoint and work directly with the `opencode-zen` alias:
+These models use the `/v1/chat/completions` endpoint and work directly with the `opencode` provider:
 
 | Model                 | Description                        |
 | --------------------- | ---------------------------------- |

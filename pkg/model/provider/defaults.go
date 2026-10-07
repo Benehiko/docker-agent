@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/modelinfo"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
 // expandModelConfigEnv substitutes ${env.X} / ${X} references in the model
@@ -157,11 +158,15 @@ func applyProviderDefaults(cfg *latest.ModelConfig, customProviders map[string]l
 			"base_url", providerCfg.BaseURL,
 		)
 		mergeFromProviderConfig(enhancedCfg, providerCfg)
+		if providerCfg.Provider != "" {
+			enhancedCfg.Provider = modelsdev.CanonicalProviderID(enhancedCfg.Provider)
+		}
 		applyModelDefaults(enhancedCfg)
 		return enhancedCfg
 	}
 
-	if alias, exists := LookupAlias(cfg.Provider); exists {
+	enhancedCfg.Provider = modelsdev.CanonicalProviderID(enhancedCfg.Provider)
+	if alias, exists := LookupAlias(enhancedCfg.Provider); exists {
 		applyAliasFallbacks(enhancedCfg, alias)
 	}
 

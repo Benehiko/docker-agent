@@ -46,8 +46,8 @@ const listTimeout = 5 * time.Second
 // from the snapshot) prevents surprising side effects like `docker agent models
 // --provider ollama` issuing a real GET against localhost.
 var liveFetchProviders = map[string]bool{
-	"opencode-zen": true,
-	"opencode-go":  true,
+	"opencode":    true,
+	"opencode-go": true,
 }
 
 // modelRow represents a single model entry for display or serialization.
@@ -129,11 +129,22 @@ func (f *modelsListFlags) runModelsListCommand(cmd *cobra.Command, args []string
 	out := cli.NewPrinter(cmd.OutOrStdout())
 	env := f.runConfig.EnvProvider()
 
-	// Normalize the provider filter to lowercase so case-sensitive map lookups
-	// in db.Providers and IsCatalogProvider all match the same way
-	// strings.EqualFold does in the outer row filter below.
+	isCustomProvider := func(name string) bool {
+		for customName := range f.runConfig.Providers {
+			if strings.EqualFold(customName, name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Custom names take precedence over built-in aliases, regardless of case.
+	customFilter := isCustomProvider(f.providerFilter)
 	if f.providerFilter != "" {
 		f.providerFilter = strings.ToLower(f.providerFilter)
+		if !customFilter {
+			f.providerFilter = modelsdev.CanonicalProviderID(f.providerFilter)
+		}
 	}
 
 	// Determine which model auto-selection would pick. DMR discovery is left
@@ -158,10 +169,15 @@ func (f *modelsListFlags) runModelsListCommand(cmd *cobra.Command, args []string
 		rows = f.collectModels(ctx, env, availableProviders, autoModel)
 	}
 
-	// Apply provider filter
 	if f.providerFilter != "" {
 		rows = slices.DeleteFunc(rows, func(r modelRow) bool {
-			return !strings.EqualFold(r.Provider, f.providerFilter)
+			if strings.EqualFold(r.Provider, f.providerFilter) {
+				return false
+			}
+			if customFilter || isCustomProvider(r.Provider) {
+				return true
+			}
+			return modelsdev.CanonicalProviderID(strings.ToLower(r.Provider)) != f.providerFilter
 		})
 	}
 

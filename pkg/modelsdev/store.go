@@ -255,10 +255,30 @@ func (s *Store) getProvider(ctx context.Context, providerID string) (*Provider, 
 
 	provider, exists := db.Providers[providerID]
 	if !exists {
+		provider, exists = db.Providers[CanonicalProviderID(providerID)]
+	}
+	if !exists {
 		return nil, fmt.Errorf("provider %q not found", providerID)
 	}
 
 	return &provider, nil
+}
+
+// legacyProviderIDs contains shipped names for the same service in models.dev.
+var legacyProviderIDs = map[string]string{
+	"fireworks":    "fireworks-ai",
+	"together":     "togetherai",
+	"moonshot":     "moonshotai",
+	"opencode-zen": "opencode",
+}
+
+// CanonicalProviderID returns the models.dev ID for a built-in provider name.
+// Unknown names and distinct services, including ChatGPT, are unchanged.
+func CanonicalProviderID(providerID string) string {
+	if canonical, ok := legacyProviderIDs[providerID]; ok {
+		return canonical
+	}
+	return providerID
 }
 
 // GetModel returns a specific model by ID. The ID must carry both a
@@ -269,27 +289,44 @@ func (s *Store) GetModel(ctx context.Context, id ID) (*Model, error) {
 		return nil, fmt.Errorf("invalid model ID: %q", id.String())
 	}
 
-	provider, err := s.getProvider(ctx, id.Provider)
+	allowFetch := s.knownProvider == nil || s.knownProvider(id.Provider)
+	db, err := s.getDatabase(ctx, allowFetch)
 	if err != nil {
 		return nil, err
 	}
 
-	model, exists := provider.Models[id.Model]
+	provider, exists := db.Providers[id.Provider]
+	if model, ok := lookupModel(provider, id); ok {
+		return &model, nil
+	}
 
-	// For amazon-bedrock, try stripping region/inference profile prefixes.
-	// Bedrock uses prefixes for cross-region inference profiles,
-	// but models.dev stores models without these prefixes.
-	if !exists && id.Provider == "amazon-bedrock" {
-		if prefix, after, ok := strings.Cut(id.Model, "."); ok && bedrockRegionPrefixes[prefix] {
-			model, exists = provider.Models[after]
+	if canonical := CanonicalProviderID(id.Provider); canonical != id.Provider {
+		aliasedProvider, aliasExists := db.Providers[canonical]
+		exists = exists || aliasExists
+		if model, ok := lookupModel(aliasedProvider, NewID(canonical, id.Model)); ok {
+			return &model, nil
 		}
 	}
 
 	if !exists {
-		return nil, fmt.Errorf("model %q not found in provider %q", id.Model, id.Provider)
+		return nil, fmt.Errorf("provider %q not found", id.Provider)
 	}
+	return nil, fmt.Errorf("model %q not found in provider %q", id.Model, id.Provider)
+}
 
-	return &model, nil
+func lookupModel(provider Provider, id ID) (Model, bool) {
+	model, exists := provider.Models[id.Model]
+	if !exists && id.Provider == "amazon-bedrock" {
+		// Cross-region inference profile prefixes are absent from the catalog.
+		if prefix, after, ok := strings.Cut(id.Model, "."); ok && bedrockRegionPrefixes[prefix] {
+			model, exists = provider.Models[after]
+		}
+	}
+	if !exists && id.Provider == "ovhcloud" {
+		// OVHcloud's API uses mixed-case IDs; its catalog uses lowercase IDs.
+		model, exists = provider.Models[strings.ToLower(id.Model)]
+	}
+	return model, exists
 }
 
 // loadDatabase loads the database from the local cache file or

@@ -230,6 +230,8 @@ $ docker agent models --provider openai
 $ docker agent models --format json | jq
 ```
 
+Provider filters are case-insensitive. For built-in providers, legacy and canonical names match the same models (`fireworks` / `fireworks-ai`, `together` / `togetherai`, `moonshot` / `moonshotai`, and `opencode-zen` / `opencode`), including gateway listings. Gateway model references retain the prefix returned by the gateway. A configured custom provider name takes precedence over a built-in alias and is matched by its own name without alias expansion.
+
 When a models gateway is configured (`--models-gateway`, `DOCKER_AGENT_MODELS_GATEWAY`, or the user config), the command first queries the gateway's `/v1/models` endpoint. A non-empty response is authoritative for the models routed through the gateway: the listing shows the models the gateway serves (`--provider` filters within it), alongside any custom providers you have configured, which serve their models from their own endpoints rather than through the gateway. If the gateway cannot be queried or serves no usable model (endpoint not implemented, empty list, invalid response, timeout, missing authentication), the command falls back to the providers you have configured directly — provider API keys, provider aliases, and custom providers — plus the model catalog; a failure of one source never prevents the others from being listed. Docker Desktop authentication is required only for HTTPS `docker.com` gateways. An available Docker Desktop token may also be sent to trusted loopback gateways, but is never sent to third-party gateways.
 
 ### `docker agent toolsets`

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/docker/docker-agent/pkg/chatgpt"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
 // Alias defines the configuration for a provider alias.
@@ -93,7 +94,7 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://api.groq.com/openai/v1",
 		TokenEnvVar: "GROQ_API_KEY",
 	},
-	"fireworks": {
+	"fireworks-ai": {
 		APIType:     "openai",
 		BaseURL:     "https://api.fireworks.ai/inference/v1",
 		TokenEnvVar: "FIREWORKS_API_KEY",
@@ -108,7 +109,7 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://api.cerebras.ai/v1",
 		TokenEnvVar: "CEREBRAS_API_KEY",
 	},
-	"together": {
+	"togetherai": {
 		APIType:     "openai",
 		BaseURL:     "https://api.together.xyz/v1",
 		TokenEnvVar: "TOGETHER_API_KEY",
@@ -118,7 +119,7 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://router.huggingface.co/v1",
 		TokenEnvVar: "HF_TOKEN",
 	},
-	"moonshot": {
+	"moonshotai": {
 		APIType:     "openai",
 		BaseURL:     "https://api.moonshot.ai/v1",
 		TokenEnvVar: "MOONSHOT_API_KEY",
@@ -161,7 +162,7 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://opencode.ai/zen/go/v1",
 		TokenEnvVar: "OPENCODE_API_KEY",
 	},
-	"opencode-zen": {
+	"opencode": {
 		APIType:     "openai",
 		BaseURL:     "https://opencode.ai/zen/v1",
 		TokenEnvVar: "OPENCODE_API_KEY",
@@ -172,7 +173,7 @@ var Aliases = map[string]Alias{
 // Lookup is case-sensitive; callers that need case-insensitive matching
 // should normalise the name first (e.g. [strings.ToLower]).
 func LookupAlias(name string) (Alias, bool) {
-	alias, ok := Aliases[name]
+	alias, ok := Aliases[modelsdev.CanonicalProviderID(name)]
 	return alias, ok
 }
 

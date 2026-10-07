@@ -2,7 +2,7 @@
 
 models:
   moonshot_model:
-    provider: moonshot
+    provider: moonshotai
     model: kimi-k3
 
 agents:

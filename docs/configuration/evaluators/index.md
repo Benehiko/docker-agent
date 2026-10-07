@@ -69,6 +69,22 @@ configured secret sources. The models gateway does not supply evaluator credenti
 
 In HCL, use `evaluator "name" { ... }` for a top-level named evaluator.
 
+## Evaluation judges
+
+Use an evaluator as an alternative to the chat judge in `docker agent eval`:
+
+```bash
+$ docker agent eval agent.yaml --judge-type evaluator
+$ docker agent eval agent.yaml --judge-type evaluator --judge-model relevance_judge
+```
+
+The first command defaults to `typesafe/jev-latest`. The second selects a named
+boolean evaluator from the agent configuration. Its instructions receive
+`transcript` and `criterion` fields and must assess criterion satisfaction with
+positive polarity. Probabilities of at least 0.5 pass. See
+[choosing a judge](../../features/evaluation/index.md#choosing-a-judge)
+for configuration, reporting, and limitations.
+
 ## Routing agents
 
 A `choice` evaluator can also select the next agent through a `routing_policy` on

@@ -490,6 +490,7 @@ func SaveRunSessionsJSON(run *EvalRun, outputDir string) (string, error) {
 			Agent:            run.Config.AgentFilename,
 			Flavors:          run.Config.Flavors,
 			JudgeModel:       run.Config.JudgeModel,
+			JudgeType:        run.Config.JudgeType,
 			Concurrency:      run.Config.Concurrency,
 			EvalsDir:         run.Config.EvalsDir,
 			BaseImage:        run.Config.BaseImage,
@@ -547,9 +548,10 @@ func populateEvalResult(result *Result) {
 		results := make([]session.RelevanceCriterionResult, 0, len(result.RelevanceResults))
 		for _, rr := range result.RelevanceResults {
 			results = append(results, session.RelevanceCriterionResult{
-				Criterion: rr.Criterion,
-				Passed:    rr.Passed,
-				Reason:    rr.Reason,
+				Criterion:   rr.Criterion,
+				Passed:      rr.Passed,
+				Reason:      rr.Reason,
+				Probability: rr.Probability,
 			})
 		}
 

@@ -685,7 +685,7 @@ type ToolCallsCheck struct {
 	Score  float64 `json:"score"`
 }
 
-// RelevanceCheck contains the result of the LLM judge relevance check.
+// RelevanceCheck contains the result of the judge relevance check.
 type RelevanceCheck struct {
 	Passed      bool                       `json:"passed"`
 	PassedCount float64                    `json:"passed_count"`
@@ -695,9 +695,10 @@ type RelevanceCheck struct {
 
 // RelevanceCriterionResult contains the judge's verdict on a single relevance criterion.
 type RelevanceCriterionResult struct {
-	Criterion string `json:"criterion"`
-	Passed    bool   `json:"passed"`
-	Reason    string `json:"reason,omitempty"`
+	Criterion   string   `json:"criterion"`
+	Passed      bool     `json:"passed"`
+	Reason      string   `json:"reason,omitempty"`
+	Probability *float64 `json:"probability,omitempty"`
 }
 
 // AssertionsCheck contains the results of code-based assertion evaluations.

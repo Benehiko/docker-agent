@@ -1313,3 +1313,34 @@ func TestSessionJSONWithoutTerminationLoads(t *testing.T) {
 	assert.Nil(t, sess.EvalResult.Termination)
 	assert.Len(t, sess.Messages, 2)
 }
+
+func TestSaveRunEvaluatorJudge(t *testing.T) {
+	t.Parallel()
+
+	for _, probability := range []*float64{nil, new(0.0), new(0.9)} {
+		run := &EvalRun{
+			Name:   "judge-results",
+			Config: Config{JudgeType: JudgeTypeEvaluator, JudgeModel: "typesafe/jev-latest"},
+			Results: []Result{{
+				Session: session.New(), RelevanceExpected: 1,
+				RelevanceResults: []RelevanceResult{{Criterion: "criterion", Probability: probability}},
+			}},
+		}
+		path, err := SaveRunSessionsJSON(run, t.TempDir())
+		require.NoError(t, err)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var output RunOutput
+		require.NoError(t, json.Unmarshal(data, &output))
+		assert.Equal(t, JudgeTypeEvaluator, output.Config.JudgeType)
+		assert.Equal(t, "typesafe/jev-latest", output.Config.JudgeModel)
+		require.Len(t, output.Sessions, 1)
+		result := output.Sessions[0].EvalResult.Checks.Relevance.Results[0]
+		assert.Equal(t, probability, result.Probability)
+		if probability == nil {
+			assert.NotContains(t, string(data), `"probability"`)
+		} else {
+			assert.Contains(t, string(data), `"probability"`)
+		}
+	}
+}

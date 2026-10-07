@@ -75,3 +75,40 @@ func TestEvalAgentImageFlagAcceptsNoneToSkipInjection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, evaluation.NoAgentImage, value)
 }
+
+func TestEvalJudgeTypeFlags(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name                 string
+		args                 []string
+		model, kind, wantErr string
+	}{
+		{"defaults", nil, defaultJudgeModel, evaluation.JudgeTypeLLM, ""},
+		{"evaluator default", []string{"--judge-type", "evaluator"}, defaultEvaluatorJudgeModel, evaluation.JudgeTypeEvaluator, ""},
+		{"evaluator explicit model", []string{"--judge-type", "evaluator", "--judge-model", "typesafe/jev-1.13.0"}, "typesafe/jev-1.13.0", evaluation.JudgeTypeEvaluator, ""},
+		{"named evaluator", []string{"--judge-model", "relevance", "--judge-type", "evaluator"}, "relevance", evaluation.JudgeTypeEvaluator, ""},
+		{"explicit empty", []string{"--judge-type", "evaluator", "--judge-model="}, "", evaluation.JudgeTypeEvaluator, ""},
+		{"LLM custom", []string{"--judge-model", "anthropic/claude-sonnet-4-0"}, "anthropic/claude-sonnet-4-0", evaluation.JudgeTypeLLM, ""},
+		{"invalid type", []string{"--judge-type", "unknown"}, "", "", "invalid --judge-type"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cmd := newEvalCmd()
+			require.NoError(t, cmd.Flags().Parse(tt.args))
+			model, err := cmd.Flags().GetString("judge-model")
+			require.NoError(t, err)
+			kind, err := cmd.Flags().GetString("judge-type")
+			require.NoError(t, err)
+			flags := evalFlags{Config: evaluation.Config{JudgeModel: model, JudgeType: kind}}
+			err = flags.resolveJudgeFlags(cmd)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.model, flags.JudgeModel)
+			assert.Equal(t, tt.kind, flags.JudgeType)
+		})
+	}
+}

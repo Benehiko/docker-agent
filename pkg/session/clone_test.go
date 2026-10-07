@@ -91,8 +91,9 @@ func TestClone_DeepCopiesEvalFields(t *testing.T) {
 			Checks: EvalResultChecks{
 				Size: &SizeCheck{Passed: true, Actual: "S", Expected: "M"},
 				Relevance: &RelevanceCheck{Results: []RelevanceCriterionResult{{
-					Criterion: "is helpful",
-					Passed:    true,
+					Criterion:   "is helpful",
+					Passed:      true,
+					Probability: new(0.9),
 				}}},
 			},
 		},
@@ -106,12 +107,14 @@ func TestClone_DeepCopiesEvalFields(t *testing.T) {
 	clone.EvalResult.Failures[0] = "mutated"
 	clone.EvalResult.Checks.Size.Actual = "XL"
 	clone.EvalResult.Checks.Relevance.Results[0].Criterion = "mutated"
+	*clone.EvalResult.Checks.Relevance.Results[0].Probability = 0.1
 
 	assert.Equal(t, "is helpful", orig.Evals.Relevance[0])
 	assert.Equal(t, "ok", orig.EvalResult.Successes[0])
 	assert.Equal(t, "missing", orig.EvalResult.Failures[0])
 	assert.Equal(t, "S", orig.EvalResult.Checks.Size.Actual)
 	assert.Equal(t, "is helpful", orig.EvalResult.Checks.Relevance.Results[0].Criterion)
+	assert.InDelta(t, 0.9, *orig.EvalResult.Checks.Relevance.Results[0].Probability, 1e-9)
 }
 
 func TestClone_DeepCopiesMessagesAndConfig(t *testing.T) {

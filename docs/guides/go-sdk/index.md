@@ -106,6 +106,34 @@ those loader options and also registers the harness and JavaScript factories
 globally. Both helpers link the full defaults; dependency-light embedders should
 continue supplying their own registries.
 
+## Loaded Configuration to Runtime
+
+`pkg/bootstrap.RuntimeOpts(loaded, runConfig)` translates a
+`teamloader.LoadResult` into model-switching and budget options. It reuses the
+shared model catalog and the encrypted configuration resolved during loading.
+It does not load a team, create a session, register factories or own resources.
+
+```go
+opts := bootstrap.RuntimeOpts(loaded, runConfig)
+opts = append(opts,
+    runtime.WithSessionStore(store),
+    runtime.WithCurrentAgent(agentName),
+    runtime.WithWorkingDir(workingDir),
+    runtime.WithHarnessFactory(codingharness.Factory),
+    runtime.WithCommandEvaluatorFactory(jscommands.Factory),
+)
+rt, err := runtime.New(ctx, loaded.Team, opts...)
+```
+
+Environment and catalog initialization happen when `RuntimeOpts` is called.
+Catalog initialization failures retain the runtime's lazy fallback. Later
+options can override the assembly defaults; callers still select interaction
+policy, tracing, storage and cleanup. In particular, callers own the supplied
+session store, and a shared team's toolsets must outlive all its runtimes.
+
+The CLI uses this helper for both its initial runtime and TUI-spawned runtimes.
+Serving adapters retain their existing wiring and budget behavior.
+
 ## Headless Embedded Chat (`pkg/embeddedchat`)
 
 `pkg/embeddedchat` is a thin wrapper around the Docker Agent runtime that lets you drive an agent from your own UI instead of running Docker Agent's Bubble Tea application. It handles runtime construction, event projection, and conversation state, exposing a simple `Send` / `Confirm` / `Restart` / `Close` API.

@@ -21,6 +21,7 @@ type StreamAdapter struct {
 	lastFinishReason chat.FinishReason
 	toolCalls        map[int]string
 	trackUsage       bool
+	serviceTier      string
 }
 
 func NewStreamAdapter(stream *ssestream.Stream[openai.ChatCompletionChunk], trackUsage bool) *StreamAdapter {
@@ -42,6 +43,9 @@ func (a *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	}
 
 	openaiResponse := a.stream.Current()
+	if openaiResponse.JSON.ServiceTier.Valid() {
+		a.serviceTier = string(openaiResponse.ServiceTier)
+	}
 
 	// Convert the OpenAI response to our generic format
 	response := chat.MessageStreamResponse{
@@ -144,6 +148,7 @@ func (a *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 			response.Usage = &chat.Usage{
 				InputTokens:  usage.PromptTokens,
 				OutputTokens: usage.CompletionTokens,
+				ServiceTier:  a.serviceTier,
 			}
 			if usage.JSON.PromptTokensDetails.Valid() {
 				// chat.Usage treats InputTokens, CachedInputTokens and

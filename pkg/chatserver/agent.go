@@ -188,6 +188,13 @@ func appendLatestUser(sess *session.Session, msgs []ChatCompletionMessage) bool 
 	return false
 }
 
+// runtimeRunner is the execution and interaction contract the chat adapter needs.
+type runtimeRunner interface {
+	RunStream(ctx context.Context, sess *session.Session) <-chan runtime.Event
+	Resume(ctx context.Context, req runtime.ResumeRequest)
+	ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error
+}
+
 // agentEmit collects the side-effect callbacks invoked by runAgentLoop as
 // it drives the runtime. All callbacks are optional; nil means "ignore
 // this kind of event".
@@ -211,7 +218,7 @@ type agentEmit struct {
 // All ErrorEvents seen in the run are joined into the returned error so
 // callers can see the full picture; the loop keeps draining until the
 // stream closes so the runtime can shut down cleanly.
-func runAgentLoop(ctx context.Context, rt runtime.Runtime, sess *session.Session, emit agentEmit) error {
+func runAgentLoop(ctx context.Context, rt runtimeRunner, sess *session.Session, emit agentEmit) error {
 	var runErrs []error
 	toolIndex := 0
 	for ev := range rt.RunStream(ctx, sess) {

@@ -40,7 +40,6 @@ import (
 	"github.com/docker/docker-agent/pkg/config/sources"
 	"github.com/docker/docker-agent/pkg/echolog"
 	"github.com/docker/docker-agent/pkg/httpsec"
-	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/servesafety"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/team"
@@ -459,7 +458,7 @@ func (s *server) commitConversation(id string, sess *session.Session, runErr err
 // error (nil on success) so the caller can decide whether to commit the
 // conversation; the HTTP response — success or error envelope — is always
 // written here.
-func (s *server) chatCompletion(c echo.Context, rt runtime.Runtime, sess *session.Session, model string) error {
+func (s *server) chatCompletion(c echo.Context, rt runtimeRunner, sess *session.Session, model string) error {
 	var toolCalls []ToolCallReference
 	emit := agentEmit{
 		onToolCall: func(tc ToolCallReference) {
@@ -496,7 +495,7 @@ func (s *server) chatCompletion(c echo.Context, rt runtime.Runtime, sess *sessio
 // whether to commit the conversation. The error is *also* reported in-band
 // as an SSE error event, so the HTTP handler itself still returns nil; the
 // return value here exists purely to drive the commit decision.
-func (s *server) streamChatCompletion(c echo.Context, rt runtime.Runtime, sess *session.Session, model string, includeUsage bool) error {
+func (s *server) streamChatCompletion(c echo.Context, rt runtimeRunner, sess *session.Session, model string, includeUsage bool) error {
 	stream := newSSEStream(c.Response(), newChatID(), model)
 
 	// Initial "role: assistant" delta so clients can start rendering.

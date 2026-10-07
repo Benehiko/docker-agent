@@ -94,6 +94,7 @@ func TestDependencies(t *testing.T) {
 		deps := listTransitiveDeps(t,
 			"./pkg/config",
 			"./pkg/teamloader",
+			"./pkg/bootstrap",
 			"./pkg/embeddedchat",
 			"./pkg/tools/builtin/api/client",
 			"./examples/golibrary/leanapi",

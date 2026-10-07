@@ -20,12 +20,16 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/toon"
 )
 
+// Opts returns loader defaults and registers global runtime factories for compatibility.
+// Use LoaderOpts with explicit runtime factories for independent runtimes.
 func Opts() []teamloader.Opt {
-	// ${...} JavaScript expressions in slash-command instructions and
-	// `harness:` agents are runtime features; enable them alongside the
-	// loader's own.
 	jscommands.Register()
 	runtime.RegisterHarness(codingharness.Factory)
+	return LoaderOpts()
+}
+
+// LoaderOpts returns loader defaults without registering runtime factories.
+func LoaderOpts() []teamloader.Opt {
 	return []teamloader.Opt{
 		teamloader.WithToolsetRegistry(toolsets.NewDefaultToolsetRegistry()),
 		teamloader.WithProviderRegistry(providers.NewDefaultRegistry()),

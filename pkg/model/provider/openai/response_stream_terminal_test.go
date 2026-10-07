@@ -85,3 +85,61 @@ func TestResponseStream_FailedReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "upstream exploded")
 	assert.Contains(t, err.Error(), "resp_789")
 }
+
+func TestResponseStream_ServiceTier(t *testing.T) {
+	t.Parallel()
+
+	for _, terminal := range []string{"response.completed", "response.done", "response.incomplete"} {
+		for _, tc := range []struct {
+			name, early, final, want string
+		}{
+			{name: "fast", final: "fast", want: "fast"},
+			{name: "priority alias", final: "priority", want: "priority"},
+			{name: "ultrafast", final: "ultrafast", want: "ultrafast"},
+			{name: "early tier retained", early: "fast", want: "fast"},
+			{name: "terminal downgrade wins", early: "fast", final: "default", want: "default"},
+			{name: "null retains earlier tier", early: "ultrafast", final: "null", want: "ultrafast"},
+			{name: "missing tier"},
+			{name: "null tier", final: "null"},
+			{name: "unknown tier", final: "future-tier", want: "future-tier"},
+		} {
+			t.Run(terminal+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				early := map[string]any{"id": "resp_tier"}
+				if tc.early != "" {
+					early["service_tier"] = tc.early
+				}
+				final := map[string]any{
+					"id": "resp_tier",
+					"usage": map[string]any{
+						"input_tokens": 100, "output_tokens": 7, "total_tokens": 107,
+						"input_tokens_details":  map[string]any{"cached_tokens": 20, "cache_write_tokens": 30},
+						"output_tokens_details": map[string]any{"reasoning_tokens": 3},
+					},
+				}
+				if tc.final != "" {
+					final["service_tier"] = tc.final
+					if tc.final == "null" {
+						final["service_tier"] = nil
+					}
+				}
+				events := decodeEvents(t, []map[string]any{
+					{"type": "response.created", "response": early},
+					{"type": terminal, "response": final},
+				})
+				adapter := newResponseStreamAdapter(&fakeEventStream{events: events}, true)
+				defer adapter.Close()
+				_, err := adapter.Recv()
+				require.NoError(t, err)
+				resp, err := adapter.Recv()
+				require.NoError(t, err)
+				require.NotNil(t, resp.Usage)
+				assert.Equal(t, tc.want, resp.Usage.ServiceTier)
+				assert.Equal(t, int64(50), resp.Usage.InputTokens)
+				assert.Equal(t, int64(100), resp.Usage.PromptTokens())
+				assert.Equal(t, int64(7), resp.Usage.OutputTokens)
+				assert.Equal(t, int64(3), resp.Usage.ReasoningTokens)
+			})
+		}
+	}
+}

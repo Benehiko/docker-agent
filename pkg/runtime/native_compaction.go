@@ -123,7 +123,7 @@ func (r *LocalRuntime) compactNatively(ctx context.Context, sess *session.Sessio
 		slog.DebugContext(ctx, "Failed to get model definition for native compaction cost", "model_id", modelID.String(), "error", err)
 		m = nil
 	}
-	m = applyConfigCost(m, modelID, native.BaseConfig().ModelConfig.Cost)
+	m = applyModelCost(m, modelID, &res.Usage, native.BaseConfig())
 	messageCost := computeMessageCost(&res.Usage, m)
 	r.recordBudget(sess, a, &res.Usage, messageCost, r.now().Sub(started), events)
 	if strings.TrimSpace(res.Summary) == "" {

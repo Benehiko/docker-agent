@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -60,6 +61,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	}
 
 	globalOptions := options.Apply(opts...)
+	resolvedBaseURL := "https://api.openai.com/v1"
+	if globalOptions.Gateway() == "" {
+		resolvedBaseURL = cmp.Or(cfg.BaseURL, os.Getenv("OPENAI_BASE_URL"), resolvedBaseURL)
+	}
 
 	var clientFn func(context.Context) (*openai.Client, error)
 	if gateway := globalOptions.Gateway(); gateway == "" {
@@ -190,6 +195,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			ModelConfig:  *cfg,
 			ModelOptions: globalOptions,
 			Env:          env,
+			BaseURL:      resolvedBaseURL,
 		},
 		clientFn: clientFn,
 	}
@@ -198,8 +204,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	// The pool is cheap (no connections opened until the first Stream call)
 	// and eager init avoids a data race on the lazy path.
 	if webSocketEnabled(cfg, &globalOptions) {
-		baseURL := cmp.Or(cfg.BaseURL, "https://api.openai.com/v1")
-		client.wsPool = newWSPool(httpToWSURL(baseURL), client.buildWSHeaderFn())
+		client.wsPool = newWSPool(httpToWSURL(resolvedBaseURL), client.buildWSHeaderFn())
 	}
 
 	return client, nil

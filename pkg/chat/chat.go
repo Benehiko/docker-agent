@@ -216,6 +216,8 @@ type Usage struct {
 	CachedInputTokens int64 `json:"cached_input_tokens"`
 	CacheWriteTokens  int64 `json:"cached_write_tokens"`
 	ReasoningTokens   int64 `json:"reasoning_tokens,omitempty"`
+	// ServiceTier is the actual processing tier reported by the provider, not the requested tier.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // PromptTokens sums the disjoint fresh, cache-read, and cache-write input buckets.
@@ -223,7 +225,7 @@ func (u *Usage) PromptTokens() int64 {
 	return u.InputTokens + u.CachedInputTokens + u.CacheWriteTokens
 }
 
-// Add accumulates other's token counts into u. A nil other is a no-op so
+// Add accumulates other's token counts into u, not per-request service tiers. A nil other is a no-op so
 // callers can pass a message's optional usage without checking.
 func (u *Usage) Add(other *Usage) {
 	if other == nil {

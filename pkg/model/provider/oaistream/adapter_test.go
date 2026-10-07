@@ -220,3 +220,52 @@ data: [DONE]
 	assert.Equal(t, "Hi", resp.Choices[0].Delta.Content)
 	assert.Empty(t, resp.Choices[0].Delta.ReasoningContent)
 }
+
+func TestStreamAdapter_ServiceTier(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, early, final, want string
+	}{
+		{name: "fast", final: `"fast"`, want: "fast"},
+		{name: "priority alias", final: `"priority"`, want: "priority"},
+		{name: "ultrafast", final: `"ultrafast"`, want: "ultrafast"},
+		{name: "early tier retained", early: `"fast"`, want: "fast"},
+		{name: "terminal downgrade wins", early: `"fast"`, final: `"default"`, want: "default"},
+		{name: "null retains earlier tier", early: `"ultrafast"`, final: `null`, want: "ultrafast"},
+		{name: "missing tier"},
+		{name: "null tier", final: `null`},
+		{name: "unknown tier preserved", final: `"future-tier"`, want: "future-tier"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			early, final := "", ""
+			if tc.early != "" {
+				early = `,"service_tier":` + tc.early
+			}
+			if tc.final != "" {
+				final = `,"service_tier":` + tc.final
+			}
+			sse := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-6-astra","choices":[{"index":0,"delta":{"content":"Hi"}}]` + early + "}\n\n" +
+				`data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-6-astra","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"total_tokens":107,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":30},"completion_tokens_details":{"reasoning_tokens":3}}` + final + "}\n\ndata: [DONE]\n\n"
+			for _, tracking := range []bool{true, false} {
+				adapter := NewStreamAdapter(newTestStream(t, sse), tracking)
+				t.Cleanup(adapter.Close)
+				_, err := adapter.Recv()
+				require.NoError(t, err)
+				resp, err := adapter.Recv()
+				require.NoError(t, err)
+				if !tracking {
+					assert.Nil(t, resp.Usage)
+					continue
+				}
+				require.NotNil(t, resp.Usage)
+				assert.Equal(t, tc.want, resp.Usage.ServiceTier)
+				assert.Equal(t, int64(50), resp.Usage.InputTokens)
+				assert.Equal(t, int64(100), resp.Usage.PromptTokens())
+				assert.Equal(t, int64(7), resp.Usage.OutputTokens)
+				assert.Equal(t, int64(3), resp.Usage.ReasoningTokens)
+			}
+		})
+	}
+}

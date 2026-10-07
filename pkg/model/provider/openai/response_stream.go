@@ -24,6 +24,7 @@ var _ responseEventStream = (*ssestream.Stream[responses.ResponseStreamEventUnio
 type ResponseStreamAdapter struct {
 	stream         responseEventStream
 	trackUsage     bool
+	serviceTier    string
 	responseState  *chat.OpenAIResponse
 	preserveOutput bool
 	responseItems  map[int64]json.RawMessage
@@ -96,6 +97,9 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 	}
 
 	event := a.stream.Current()
+	if event.Response.JSON.ServiceTier.Valid() {
+		a.serviceTier = string(event.Response.ServiceTier)
+	}
 	slog.Debug("Stream event received", "type", event.Type)
 	response := chat.MessageStreamResponse{}
 
@@ -378,6 +382,7 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 				CachedInputTokens: u.InputTokensDetails.CachedTokens,
 				CacheWriteTokens:  u.InputTokensDetails.CacheWriteTokens,
 				ReasoningTokens:   u.OutputTokensDetails.ReasoningTokens,
+				ServiceTier:       a.serviceTier,
 			}
 		}
 		// Check if there were any tool calls in the output
@@ -420,6 +425,7 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 				CachedInputTokens: u.InputTokensDetails.CachedTokens,
 				CacheWriteTokens:  u.InputTokensDetails.CacheWriteTokens,
 				ReasoningTokens:   u.OutputTokensDetails.ReasoningTokens,
+				ServiceTier:       a.serviceTier,
 			}
 		}
 		finishReason := chat.FinishReasonLength

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -842,21 +843,140 @@ func TestModelsListCommand_LegacyProviderFilter(t *testing.T) {
 
 func TestModelsListCommand_LegacyNamedCustomProviderFilter(t *testing.T) {
 	t.Parallel()
-	server, _ := newCustomProviderServer(t, []string{"custom-model"})
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		t.Run(legacy, func(t *testing.T) {
+			t.Parallel()
+			for _, name := range []string{legacy, strings.ToUpper(legacy[:1]) + legacy[1:]} {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					server, _ := newCustomProviderServer(t, []string{"custom-model"})
+					for _, filter := range []string{legacy, strings.ToUpper(legacy[:1]) + legacy[1:], strings.ToUpper(legacy)} {
+						t.Run(filter, func(t *testing.T) {
+							t.Parallel()
+							var buf bytes.Buffer
+							cmd := newModelsCmd(
+								withTestConfig(map[string]string{"MYPROVIDER_API_KEY": "custom-key"}),
+								withProviders(map[string]latest.ProviderConfig{
+									name: {BaseURL: server.URL, TokenKey: "MYPROVIDER_API_KEY"},
+								}),
+							)
+							cmd.SetOut(&buf)
+							cmd.SetErr(&buf)
+							cmd.SetArgs([]string{"--provider", filter, "--format", "json"})
+							require.NoError(t, cmd.Execute())
+							var rows []modelRow
+							require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+							require.Len(t, rows, 1)
+							assert.Equal(t, name, rows[0].Provider)
+							assert.Equal(t, "custom-model", rows[0].Model)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestModelsListCommand_GatewayLegacyProviderFilter(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		t.Run(legacy, func(t *testing.T) {
+			t.Parallel()
+			canonical := modelsdev.CanonicalProviderID(legacy)
+			for _, servedProvider := range []string{legacy, canonical} {
+				t.Run(servedProvider, func(t *testing.T) {
+					t.Parallel()
+					servedID := servedProvider + "/served-model"
+					gw, _ := newGatewayServer(t, fmt.Sprintf(`{"object":"list","data":[{"id":%q},{"id":"openai/other-model"}]}`, servedID))
+					for _, filter := range []string{legacy, canonical} {
+						t.Run(filter, func(t *testing.T) {
+							t.Parallel()
+							var buf bytes.Buffer
+							cmd := newModelsCmd(
+								withTestConfig(gatewayTestEnv(nil)),
+								withProviders(map[string]latest.ProviderConfig{}),
+								withCatalog(&modelsdev.Database{}),
+							)
+							cmd.SetOut(&buf)
+							cmd.SetErr(&buf)
+							cmd.SetArgs([]string{"--models-gateway", gw.URL, "--provider", filter, "--format", "json"})
+							require.NoError(t, cmd.Execute())
+							var rows []modelRow
+							require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+							require.Len(t, rows, 1)
+							assert.Equal(t, servedProvider, rows[0].Provider)
+							assert.Equal(t, "served-model", rows[0].Model)
+							assert.Equal(t, servedID, rows[0].Provider+"/"+rows[0].Model)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestModelsListCommand_LegacyCustomProviderPrecedence(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []string{"fireworks", "together", "moonshot", "opencode-zen"} {
+		t.Run(legacy, func(t *testing.T) {
+			t.Parallel()
+			canonical := modelsdev.CanonicalProviderID(legacy)
+			name := strings.ToUpper(legacy[:1]) + legacy[1:]
+			custom, _ := newCustomProviderServer(t, []string{"custom-model"})
+			gw, _ := newGatewayServer(t, fmt.Sprintf(`{"object":"list","data":[{"id":%q},{"id":%q}]}`, canonical+"/gateway-model", legacy+"/legacy-gateway-model"))
+			for _, tt := range []struct {
+				filter string
+				want   []modelRow
+			}{
+				{legacy, []modelRow{{Provider: name, Model: "custom-model"}, {Provider: legacy, Model: "legacy-gateway-model"}}},
+				{canonical, []modelRow{{Provider: canonical, Model: "gateway-model"}}},
+			} {
+				t.Run(tt.filter, func(t *testing.T) {
+					t.Parallel()
+					env := gatewayTestEnv(nil)
+					env["MYPROVIDER_API_KEY"] = "custom-key"
+					var buf bytes.Buffer
+					cmd := newModelsCmd(
+						withTestConfig(env),
+						withCatalog(&modelsdev.Database{}),
+						withProviders(map[string]latest.ProviderConfig{
+							name: {BaseURL: custom.URL, TokenKey: "MYPROVIDER_API_KEY"},
+						}),
+					)
+					cmd.SetOut(&buf)
+					cmd.SetErr(&buf)
+					cmd.SetArgs([]string{"--models-gateway", gw.URL, "--provider", tt.filter, "--format", "json"})
+					require.NoError(t, cmd.Execute())
+					var rows []modelRow
+					require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+					assert.Equal(t, tt.want, rows)
+				})
+			}
+		})
+	}
+}
+
+func TestModelsListCommand_CaseDuplicateCustomProviderFilter(t *testing.T) {
+	t.Parallel()
+	upper, _ := newCustomProviderServer(t, []string{"upper-model"})
+	lower, _ := newCustomProviderServer(t, []string{"lower-model"})
 	var buf bytes.Buffer
 	cmd := newModelsCmd(
 		withTestConfig(map[string]string{"MYPROVIDER_API_KEY": "custom-key"}),
 		withProviders(map[string]latest.ProviderConfig{
-			"fireworks": {BaseURL: server.URL, TokenKey: "MYPROVIDER_API_KEY"},
+			"Fireworks": {BaseURL: upper.URL, TokenKey: "MYPROVIDER_API_KEY"},
+			"fireworks": {BaseURL: lower.URL, TokenKey: "MYPROVIDER_API_KEY"},
 		}),
 	)
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
-	cmd.SetArgs([]string{"--provider", "fireworks", "--format", "json"})
+	cmd.SetArgs([]string{"--provider", "FiReWoRkS", "--format", "json"})
 	require.NoError(t, cmd.Execute())
 	var rows []modelRow
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
-	require.Len(t, rows, 1)
-	assert.Equal(t, "fireworks", rows[0].Provider)
-	assert.Equal(t, "custom-model", rows[0].Model)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "Fireworks", rows[0].Provider)
+	assert.Equal(t, "upper-model", rows[0].Model)
+	assert.Equal(t, "fireworks", rows[1].Provider)
+	assert.Equal(t, "lower-model", rows[1].Model)
 }
